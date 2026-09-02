@@ -1,0 +1,7 @@
+python-dotenv
+python-dateutil
+PyMySQL
+mfrc522
+RPi-GPIO
+RPLCD
+smbus2

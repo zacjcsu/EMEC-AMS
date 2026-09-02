@@ -1,0 +1,52 @@
+
+RPi setup:
+User: emec
+User password: Emec123
+
+- Extract folder
+- sudo raspi-config
+- make sure timezone and keyboard settings are correct
+- Create EMEC-AMS-REPO folder
+- Setup myenv `python3 -m venv myvenv`
+- Create emec-ams folder
+- source myvenv/bin/activate
+- cd emec-ams/
+- pip install -r requirements.txt
+- Edit config.json
+- To setup systemctl
+`sudo nano /etc/systemd/system/emec-ams.service`
+
+- Add this to the file:
+`
+[Unit]
+Description=EMEC Access Management System
+After=network.target
+
+[Service]
+User=emec
+WorkingDirectory=/home/emec/emec-ams
+ExecStart=/home/emec/emec-ams/myvenv/bin/python /home/emec/emec-ams/main.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+StandardOutput=append:/home/emec/emec-ams/logs/errors.log
+StandardError=append:/home/emec/emec-ams/logs/errors.log
+
+[Install]
+WantedBy=multi-user.target
+`
+
+-chmod +x /home/emec/emec-ams/main.py
+
+
+- To start and recheck the system start:
+sudo systemctl daemon-reload
+sudo systemctl daemon-reexec
+sudo systemctl enable emec-ams.service
+sudo systemctl restart emec-ams.service
+sudo systemctl status emec-ams.service
+
+
+- journal
+journalctl -u emec-ams.service -f

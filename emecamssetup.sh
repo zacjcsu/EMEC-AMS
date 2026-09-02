@@ -3,13 +3,15 @@
 # EMEC Access Management System - Raspberry Pi provisioning script
 #
 # Usage (recommended, works with interactive prompts):
-#   curl -fsSL <URL> -o emec-setup.sh && bash emec-setup.sh
+#   curl -fsSL https://raw.githubusercontent.com/zacjcsu/EMEC-AMS/main/emecamssetup.sh | bash
 #
 # Fully unattended:
-#   MACHINE_ID=lathe-001 MACHINE_NAME="Manual Lathe 1" MACHINE_TYPE="Manual Lathe" \
-#     bash emec-setup.sh --yes
+#   curl -fsSL https://raw.githubusercontent.com/zacjcsu/EMEC-AMS/main/emecamssetup.sh \
+#     | MACHINE_ID=lathe-001 MACHINE_NAME="Manual Lathe 1" MACHINE_TYPE="Manual Lathe" \
+#       AZURE_PASSWORD='...' bash -s -- --yes
 #
-# Safe to re-run. Existing config is kept unless you change it at the prompts.
+# Safe to re-run: re-running is also how you update a Pi to the latest commit.
+# Existing config, venv, logs and local DB are preserved.
 
 set -euo pipefail
 
@@ -23,16 +25,16 @@ VENV_DIR="${APP_DIR}/myvenv"
 SERVICE_NAME="emec-ams"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
-# Where the application code comes from: "drive" or "git".
-#   drive - downloads a .zip from Google Drive (set SOURCE_DRIVE_ID)
-#   git   - clones from GitHub (set SOURCE_REPO / SOURCE_BRANCH)
-SOURCE_MODE="${SOURCE_MODE:-drive}"
+# Where the application code comes from: "git" or "drive".
+#   git   - clones from GitHub (set SOURCE_REPO / SOURCE_BRANCH). Default.
+#   drive - downloads a .zip from Google Drive (set SOURCE_DRIVE_ID). Fallback.
+SOURCE_MODE="${SOURCE_MODE:-git}"
 
-# Google Drive file ID of emec-ams.zip.
+# Google Drive file ID of emec-ams.zip. Only used when SOURCE_MODE=drive.
 # From a share link like https://drive.google.com/file/d/<THIS_PART>/view
 SOURCE_DRIVE_ID="${SOURCE_DRIVE_ID:-1xKYNR2btNIZu5AqLziXFbyG05NyFkOai}"
 
-SOURCE_REPO="${SOURCE_REPO:-https://github.com/Tharunya07/EMEC-AMS.git}"
+SOURCE_REPO="${SOURCE_REPO:-https://github.com/zacjcsu/EMEC-AMS.git}"
 SOURCE_BRANCH="${SOURCE_BRANCH:-main}"
 
 # Locale / regional settings applied non-interactively (replaces raspi-config).
@@ -40,15 +42,20 @@ TIMEZONE="${TIMEZONE:-America/Denver}"
 KEYBOARD_LAYOUT="${KEYBOARD_LAYOUT:-us}"
 WIFI_COUNTRY="${WIFI_COUNTRY:-US}"
 
-# Azure MySQL connection, written to ${APP_DIR}/.env
-# NOTE: these credentials are baked in. Anyone who can read this script can read
-# them. Restrict who can reach the hosted copy, and rotate the password if the
-# script is ever posted somewhere public.
-AZURE_HOST="${AZURE_HOST:-ams-mysql-server.mysql.database.azure.com}"
-AZURE_USER="${AZURE_USER:-pi}"
-AZURE_PASSWORD="${AZURE_PASSWORD:-Tharunya123}"
-AZURE_DATABASE="${AZURE_DATABASE:-emec_access}"
-AZURE_SSL_CA="${AZURE_SSL_CA:-/etc/ssl/certs/ca-certificates.crt}"
+# Azure MySQL connection, written to ${APP_DIR}/.env at mode 600.
+# No password is stored in this script. It is prompted for, or supplied as the
+# AZURE_PASSWORD environment variable for unattended runs. The values below are
+# only the defaults offered at the prompt.
+DEF_AZURE_HOST="ams-mysql-server.mysql.database.azure.com"
+DEF_AZURE_USER="pi"
+DEF_AZURE_DATABASE="emec_access"
+DEF_AZURE_SSL_CA="/etc/ssl/certs/ca-certificates.crt"
+
+AZURE_HOST="${AZURE_HOST:-}"
+AZURE_USER="${AZURE_USER:-}"
+AZURE_PASSWORD="${AZURE_PASSWORD:-}"
+AZURE_DATABASE="${AZURE_DATABASE:-}"
+AZURE_SSL_CA="${AZURE_SSL_CA:-}"
 
 ASSUME_YES=0
 [[ "${1:-}" == "--yes" || "${1:-}" == "-y" ]] && ASSUME_YES=1
@@ -71,9 +78,25 @@ ok()   { printf '    %s[ok]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
 warn() { printf '    %s[warn]%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
 die()  { printf '\n%s[error]%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
 
-# Prompts read from the terminal, not stdin, so the script still works when it
-# is piped into bash.
-if [[ -r /dev/tty ]]; then TTY=/dev/tty; else TTY=/dev/stdin; fi
+# Prompts read from the controlling terminal, not stdin, so the script still
+# works when it is piped into bash. /dev/tty can exist but be unopenable (no
+# controlling terminal), so test that it actually opens rather than trusting -r.
+TTY=""
+if [[ -e /dev/tty ]] && ( : </dev/tty ) 2>/dev/null; then
+    TTY=/dev/tty
+elif [[ -t 0 ]]; then
+    TTY=/dev/stdin
+fi
+CAN_PROMPT=0
+[[ -n "$TTY" ]] && CAN_PROMPT=1
+
+no_prompt_die() {
+    die "Cannot prompt for '$1': no terminal available.
+      Run from an interactive shell, or re-run non-interactively with --yes and
+      supply the values as environment variables, e.g.
+        MACHINE_ID=lathe-001 MACHINE_NAME='Manual Lathe 1' \\
+        MACHINE_TYPE='Manual Lathe' AZURE_PASSWORD='...' bash -s -- --yes"
+}
 
 ask() {
     # ask <variable-name> <prompt> <default>
@@ -83,8 +106,32 @@ ask() {
         info "${__prompt}: ${__default}"
         return
     fi
+    (( CAN_PROMPT )) || no_prompt_die "$__prompt"
     read -r -p "    ${__prompt} [${__default}]: " __reply <"$TTY" || true
     printf -v "$__var" '%s' "${__reply:-$__default}"
+}
+
+ask_secret() {
+    # ask_secret <variable-name> <prompt>   (no echo, asks twice to catch typos)
+    local __var="$1" __prompt="$2" __a="" __b="" __try=0
+    if (( ASSUME_YES )); then
+        die "${__prompt} is required. With --yes, pass it as an environment variable: ${__var}=..."
+    fi
+    (( CAN_PROMPT )) || no_prompt_die "$__prompt"
+    while (( __try < 3 )); do
+        read -rs -p "    ${__prompt}: " __a <"$TTY" || true; printf '\n'
+        read -rs -p "    ${__prompt} (again): " __b <"$TTY" || true; printf '\n'
+        if [[ -z "$__a" ]]; then
+            warn "Cannot be empty."
+        elif [[ "$__a" != "$__b" ]]; then
+            warn "Entries did not match."
+        else
+            printf -v "$__var" '%s' "$__a"
+            return
+        fi
+        __try=$(( __try + 1 ))
+    done
+    die "Too many failed attempts."
 }
 
 json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
@@ -118,6 +165,9 @@ IS_PI5=0
 (( IS_PI5 )) && info "Pi 5 detected: will substitute rpi-lgpio for RPi.GPIO."
 
 step "Requesting sudo access up front"
+if ! sudo -n true 2>/dev/null; then
+    (( CAN_PROMPT )) || die "sudo needs a password but there is no terminal to ask on. Run from an interactive shell, or configure passwordless sudo for ${APP_USER}."
+fi
 sudo -v || die "sudo authentication failed."
 # Keep the sudo timestamp alive for the length of the run.
 ( while true; do sudo -n true 2>/dev/null || exit; sleep 50; done ) &
@@ -155,6 +205,28 @@ MACHINE_ID="${MACHINE_ID:-}"; MACHINE_NAME="${MACHINE_NAME:-}"; MACHINE_TYPE="${
 
 [[ -n "$MACHINE_ID" ]] || die "Machine ID cannot be empty."
 ok "${MACHINE_ID} / ${MACHINE_NAME} / ${MACHINE_TYPE}"
+
+# ---------------------------------------------------------------------------
+# 1b. Azure credentials
+# ---------------------------------------------------------------------------
+
+step "Azure database credentials (written to .env)"
+
+ENV_FILE="${APP_DIR}/.env"
+KEEP_ENV=0
+
+if [[ -f "$ENV_FILE" ]] && [[ -z "$AZURE_PASSWORD" ]]; then
+    KEEP_ENV=1
+    ok "Existing .env found; keeping it."
+    info "To replace it, re-run with AZURE_PASSWORD=... or delete ${ENV_FILE} first."
+else
+    [[ -z "$AZURE_HOST"     ]] && ask AZURE_HOST     "Azure MySQL host"     "$DEF_AZURE_HOST"
+    [[ -z "$AZURE_USER"     ]] && ask AZURE_USER     "Azure MySQL user"     "$DEF_AZURE_USER"
+    [[ -z "$AZURE_DATABASE" ]] && ask AZURE_DATABASE "Azure database"       "$DEF_AZURE_DATABASE"
+    [[ -z "$AZURE_SSL_CA"   ]] && ask AZURE_SSL_CA   "SSL CA bundle path"   "$DEF_AZURE_SSL_CA"
+    [[ -z "$AZURE_PASSWORD" ]] && ask_secret AZURE_PASSWORD "Azure MySQL password"
+    ok "Credentials collected for ${AZURE_USER}@${AZURE_HOST}"
+fi
 
 # ---------------------------------------------------------------------------
 # 2. Regional settings (the raspi-config steps, done non-interactively)
@@ -305,17 +377,22 @@ touch "${APP_DIR}/logs/errors.log" "${APP_DIR}/logs/sync.log"
 
 step "Writing configuration"
 
-umask 077
-cat >"${APP_DIR}/.env" <<EOF
+if (( KEEP_ENV )); then
+    chmod 600 "$ENV_FILE" 2>/dev/null || true
+    ok ".env left untouched (mode 600)"
+else
+    umask 077
+    cat >"$ENV_FILE" <<EOF
 AZURE_HOST=${AZURE_HOST}
 AZURE_USER=${AZURE_USER}
 AZURE_PASSWORD=${AZURE_PASSWORD}
 AZURE_DATABASE=${AZURE_DATABASE}
 AZURE_SSL_CA=${AZURE_SSL_CA}
 EOF
-umask 022
-chmod 600 "${APP_DIR}/.env"
-ok ".env written (mode 600)"
+    umask 022
+    chmod 600 "$ENV_FILE"
+    ok ".env written (mode 600)"
+fi
 
 cat >"${APP_DIR}/config/config.json" <<EOF
 {

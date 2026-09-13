@@ -1,36 +1,23 @@
-# ---- Secrets -------------------------------------------------------------
-# Written by emecamssetup.sh at install time, mode 600. Never commit.
+# Secrets
 .env
 .env.*
 !.env.example
 
-# ---- Per-machine config --------------------------------------------------
-# Every Pi has its own machine_id. The setup script writes this file and
-# excludes it when syncing code, so it does not belong in git.
-# Currently tracked: run `git rm --cached config/config.json` once.
+# Machine config
 config/config.json
 
-# ---- Runtime state -------------------------------------------------------
-# Local SQLite mirror, rebuilt by create_local_db.py on first run.
+# Local database
 data/
 *.db
 *.db-journal
 *.sqlite
 *.sqlite3
 
-# Keep the logs directory in the repo, ignore its contents. The systemd unit
-# appends to logs/errors.log and fails to start if the directory is missing.
+# Logs
 logs/*
 !logs/.gitkeep
 
-# ---- Virtual environment -------------------------------------------------
-# Lives at emec-ams/myvenv on the Pi. Never portable, never committed.
-myvenv/
-venv/
-.venv/
-env/
-
-# ---- Python --------------------------------------------------------------
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -38,10 +25,29 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
-# ---- Editors and OS ------------------------------------------------------
+# Venv
+myvenv/
+venv/
+.venv/
+env/
+
+# Editors
 .vscode/
 .idea/
 *.swp
 *~
 .DS_Store
 Thumbs.db
+
+# KiCad
+*.kicad_prl
+*-backups/
+fp-info-cache
+*.bak
+_autosave-*
+*.kicad_sch-bak
+*.kicad_pcb-bak
+.history/
+
+# Fab upload
+*.zip

@@ -1,5 +1,3 @@
-# db/azure_sync.py
-
 import pymysql
 import sqlite3
 import logging

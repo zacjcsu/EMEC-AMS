@@ -1,12 +1,7 @@
-# utils/hardware_stubs.py
-#
-# On a real Raspberry Pi, RPi.GPIO / smbus / smbus2 / mfrc522 are installed
-# and this module does nothing. On any machine where they aren't (Windows,
-# macOS, a plain dev container), it registers no-op fakes in sys.modules
-# under those same names, so rfid/reader.py, relay/controller.py, and
-# lcd/RGB1602.py can `import RPi.GPIO`, `from smbus import SMBus`, and
-# `from mfrc522 import MFRC522` unchanged. Must be imported before any of
-# those modules.
+# On a Raspberry Pi, RPi.GPIO / smbus / smbus2 / mfrc522 are installed and
+# this module does nothing. Elsewhere, it registers no-op fakes in
+# sys.modules under those names so code can `import RPi.GPIO` etc.
+# unchanged. Must be imported before any of those modules.
 
 import logging
 import sys

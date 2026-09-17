@@ -1,5 +1,3 @@
-# utils/startup_check.py
-
 import os
 import time
 import socket

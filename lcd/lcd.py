@@ -1,5 +1,3 @@
-# lcd/lcd.py
-
 from lcd.RGB1602 import RGB1602
 
 class LCD:

@@ -1,5 +1,3 @@
-# rfid/validator.py
-
 import time
 import logging
 from datetime import datetime
@@ -14,7 +12,6 @@ def validate_card(csu_id, uid_num, db, lcd, relay):
     logger.info(f"[VALIDATOR] Card scanned: {csu_id}")
     user = db.get_user(csu_id)
 
-    # CASE 1: Unknown or unauthorized user
     if not user or not db.has_permission(csu_id, MACHINE_ID):
         lcd.display("Access Denied", "Raising req",  color="red")
         time.sleep(3)
@@ -35,7 +32,6 @@ def validate_card(csu_id, uid_num, db, lcd, relay):
     # CASE 2: Valid user with permission
     display_name = user["name"] if user["name"] else str(csu_id)
 
-    # ENFORCE AFTER-HOURS CHECK
     lab_open, lab_close = db.get_open_close_times()
     if lab_open and lab_close:
         fmt = "%H:%M"
@@ -54,7 +50,6 @@ def validate_card(csu_id, uid_num, db, lcd, relay):
         except Exception as e:
             logger.error(f"[VALIDATOR] Time parse error: {e}")
 
-    # ENSURE UID IS STORED
     if db.ensure_user_uid(csu_id, uid_num):
         logger.info(f"[SYNC] UID updated for {csu_id}, syncing to Azure")
         push_user_update(csu_id)

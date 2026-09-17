@@ -110,11 +110,9 @@ class RGB1602:
     
     # Send function set command sequence
     self.command(LCD_FUNCTIONSET | self._showfunction)
-    #delayMicroseconds(4500);  # wait more than 4.1ms
     time.sleep(0.005)
     # second try
     self.command(LCD_FUNCTIONSET | self._showfunction);
-    #delayMicroseconds(150);
     time.sleep(0.005)
     # third go
     self.command(LCD_FUNCTIONSET | self._showfunction)

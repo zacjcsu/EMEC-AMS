@@ -1,5 +1,3 @@
-# relay/session_manager.py
-
 import time
 import uuid
 import logging

@@ -1,5 +1,3 @@
-# relay/controller.py
-
 import RPi.GPIO as GPIO
 from config.constants import RELAY_PIN
 import time

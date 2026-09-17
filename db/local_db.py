@@ -1,5 +1,3 @@
-# db/local_db.py
-
 import sqlite3
 import os
 import logging

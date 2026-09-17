@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# main.py
 
 from utils import hardware_stubs  # noqa: F401  (must be imported first, see utils/hardware_stubs.py)
 from utils.startup_check import startup_sequence
@@ -18,7 +17,6 @@ import logging
 from logging.handlers import TimedRotatingFileHandler
 import os
 
-# Setup logging
 os.makedirs("logs", exist_ok=True)
 handler = TimedRotatingFileHandler(
     "logs/sync.log", when="D", interval=1, backupCount=7
@@ -29,7 +27,6 @@ formatter = logging.Formatter(
 )
 handler.setFormatter(formatter)
 logging.basicConfig(level=logging.INFO, handlers=[handler])
-
 logger = logging.getLogger("main")
 
 lcd = LCD()
@@ -51,12 +48,10 @@ signal.signal(signal.SIGINT, exit_handler)
 def main():
     while True:
         try:
-            # PHASE 1 Startup
             if not startup_sequence(lcd, db):
                 time.sleep(5)
                 continue
 
-            # PHASE 2 Scan for CSU ID
             while True:
                 scan = reader.read_card()
                 if scan:
@@ -68,13 +63,8 @@ def main():
                         startup_sequence(lcd, db)
                 time.sleep(CARD_POLL_INTERVAL)
 
-            # PHASE 3 Start Session
             session_mgr.start_session(validated_csu_id, display_name)
-
-            # PHASE 4 Wait for card removal
             session_mgr.wait_for_card_removal(reader)
-
-            # PHASE 5 Grace Period Logic
             session_mgr.handle_grace_period(reader)
         except Exception:
             logger.exception("[MAIN] Unhandled error in main loop; recovering.")

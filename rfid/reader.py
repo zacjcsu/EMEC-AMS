@@ -1,5 +1,3 @@
-# rfid/reader.py
-
 from mfrc522 import MFRC522
 import RPi.GPIO as GPIO
 import time

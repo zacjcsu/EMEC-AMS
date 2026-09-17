@@ -5,9 +5,7 @@ import uuid
 import logging
 from config.constants import MACHINE_ID, CARD_GRACE_PERIOD_DEFAULT
 from db.azure_sync import sync_session_to_azure, push_user_status, push_machine_status
-from config.constants import (
-    STATUS_NEUTRAL, STATUS_IN_USE, STATUS_OFFLINE, STATUS_MAINTENANCE, LCD_LINE_DELAY
-)
+from config.constants import STATUS_NEUTRAL, STATUS_IN_USE, LCD_LINE_DELAY
 
 logger = logging.getLogger("session")
 

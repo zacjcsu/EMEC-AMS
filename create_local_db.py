@@ -2,6 +2,9 @@
 
 import sqlite3
 import os
+import logging
+
+logger = logging.getLogger("create_local_db")
 
 DB_PATH = "data/local.db"
 os.makedirs("data", exist_ok=True)
@@ -100,4 +103,4 @@ def create_local_db():
     cur.executescript(schema)
     conn.commit()
     conn.close()
-    print(f"Local DB created at {DB_PATH}")
+    logger.info(f"Local DB created at {DB_PATH}")

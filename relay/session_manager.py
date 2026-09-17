@@ -3,9 +3,8 @@
 import time
 import uuid
 import logging
-import RPi.GPIO as GPIO
 from lcd.lcd import LCD
-from config.constants import RELAY_PIN, MACHINE_ID, CARD_GRACE_PERIOD_DEFAULT
+from config.constants import MACHINE_ID, CARD_GRACE_PERIOD_DEFAULT
 from db.local_db import LocalDB
 from db.azure_sync import sync_session_to_azure, push_user_status, push_machine_status
 from relay.controller import RelayController
@@ -20,15 +19,24 @@ class SessionManager:
         self.db = LocalDB()
         self.lcd = LCD()
         self.relay = RelayController()
+        self._reset_session_state()
+
+    def _reset_session_state(self):
         self.active_session_id = None
         self.active_csu_id = None
         self.session_start_time = None
         self.display_name = None
 
-        GPIO.setwarnings(False)
-        GPIO.setmode(GPIO.BOARD)
-        GPIO.setup(RELAY_PIN, GPIO.OUT)
-        GPIO.output(RELAY_PIN, GPIO.LOW)
+    def _show(self, line1, line2, color, delay=0):
+        self.lcd.display(line1, line2, color=color)
+        if delay:
+            time.sleep(delay)
+
+    def _sync_machine_status(self, status, csu_id):
+        self.db.update_machine_status(MACHINE_ID, status)
+        self.db.update_machine_heartbeat(MACHINE_ID)
+        push_user_status(csu_id)
+        push_machine_status(MACHINE_ID)
 
     def start_session(self, csu_id, display_name):
         if not self.active_session_id:
@@ -42,15 +50,10 @@ class SessionManager:
 
         self.active_csu_id = csu_id
         self.display_name = display_name
-        self.db.update_machine_status(MACHINE_ID, STATUS_IN_USE)
-        self.db.update_machine_heartbeat(MACHINE_ID)
-        push_user_status(csu_id)
-        push_machine_status(MACHINE_ID)
+        self._sync_machine_status(STATUS_IN_USE, csu_id)
 
         self.relay.turn_on()
-        self.lcd.clear()
-        self.lcd.display(display_name[:16], "in use", color="green")
-
+        self._show(display_name[:16], "in use", color="green")
 
     def wait_for_card_removal(self, reader):
         absence_start = None
@@ -62,17 +65,14 @@ class SessionManager:
                     absence_start = None
                 else:
                     logger.info("[SESSION] New card detected mid-session.")
-                    self.lcd.clear()
-                    self.lcd.display("New card mid-sesh", "Resetting...", color="red")
-                    time.sleep(LCD_LINE_DELAY)
+                    self._show("New card mid-sesh", "Resetting...", color="red", delay=LCD_LINE_DELAY)
                     self.force_end_session()
                     break
             else:
                 if absence_start is None:
                     absence_start = time.time()
                 elif time.time() - absence_start >= 3:
-                    self.lcd.clear()
-                    self.lcd.display("Card removed", "Waiting for reinsert", color="yellow")
+                    self._show("Card removed", "Waiting for reinsert", color="yellow")
                     break
             time.sleep(0.5)
 
@@ -83,20 +83,15 @@ class SessionManager:
             remaining = int(end_time - time.time())
             self.lcd.display("Remove detected", f"Reinsert: {remaining}s", color="yellow")
 
-
             scan = reader.read_card()
             if scan:
                 uid, csu_id = scan
                 if csu_id == self.active_csu_id:
-                    self.lcd.clear()
-                    self.lcd.display("Session", "resumed", color="green")
-                    time.sleep(1)
+                    self._show("Session", "resumed", color="green", delay=1)
                     self.start_session(csu_id, self.display_name)
                     return "resumed"
                 else:
-                    self.lcd.clear()
-                    self.lcd.display("New card at grace", "Resetting...", color="red")
-                    time.sleep(LCD_LINE_DELAY)
+                    self._show("New card at grace", "Resetting...", color="red", delay=LCD_LINE_DELAY)
                     self.force_end_session()
                     return "new_card"
             time.sleep(1)
@@ -115,21 +110,12 @@ class SessionManager:
 
         self.db.end_session(self.active_session_id)
         self.db.mark_user_inactive(self.active_csu_id)
-        self.db.update_machine_status(MACHINE_ID, STATUS_NEUTRAL)
-        self.db.update_machine_heartbeat(MACHINE_ID)
-
-        push_user_status(self.active_csu_id)
-        push_machine_status(MACHINE_ID)
+        self._sync_machine_status(STATUS_NEUTRAL, self.active_csu_id)
 
         sync_session_to_azure(self.active_session_id)
         logger.info(f"[SESSION] Ended: {self.display_name} ({self.active_csu_id}), duration: {duration_min} min")
 
-        self.lcd.clear()
-        self.lcd.display("Session", "ended", color="red")
-        time.sleep(1)
+        self._show("Session", "ended", color="red", delay=1)
 
-        self.active_session_id = None
-        self.active_csu_id = None
-        self.session_start_time = None
-        self.display_name = None
+        self._reset_session_state()
         self.relay.turn_off()

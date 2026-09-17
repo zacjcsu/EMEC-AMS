@@ -34,6 +34,7 @@ def load_machine_config():
         return ("UNKNOWN", "Unnamed Machine", "Unknown Type")
 
 MACHINE_ID, MACHINE_NAME, MACHINE_TYPE = load_machine_config()
+MACHINE_ID = MACHINE_ID.casefold()
 
 
 # === Relay and Card Constants ===

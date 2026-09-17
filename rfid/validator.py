@@ -3,20 +3,14 @@
 import time
 import logging
 from datetime import datetime
-from db.local_db import LocalDB
 from db.azure_sync import sync_local_from_azure, push_access_requests, push_user_update
-from lcd.lcd import LCD
 from config.constants import MACHINE_ID
-from relay.controller import RelayController
 from utils.startup_check import startup_sequence
 from config.constants import STATUS_IN_USE, LCD_LINE_DELAY
 
 logger = logging.getLogger("validator")
-lcd = LCD()
-relay = RelayController()
-db = LocalDB()
 
-def validate_card(csu_id, uid_num):
+def validate_card(csu_id, uid_num, db, lcd, relay):
     logger.info(f"[VALIDATOR] Card scanned: {csu_id}")
     user = db.get_user(csu_id)
 
@@ -35,7 +29,7 @@ def validate_card(csu_id, uid_num):
         time.sleep(LCD_LINE_DELAY)
 
         # After request sync, re-sync system data
-        startup_sequence()
+        startup_sequence(lcd, db)
         return None, None
 
     # CASE 2: Valid user with permission

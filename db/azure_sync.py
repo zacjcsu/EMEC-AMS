@@ -5,7 +5,6 @@ import sqlite3
 import logging
 import os
 from config.constants import AZURE_ENV_KEYS, LOCAL_DB_PATH
-from db.local_db import LocalDB
 
 logger = logging.getLogger("azure_sync")
 
@@ -73,8 +72,7 @@ def sync_session_to_azure(session_id):
     except Exception as e:
         logger.error(f"[SYNC] Session sync failed: {e}")
 
-def push_machine_status(machine_id):
-    db = LocalDB()
+def push_machine_status(db, machine_id):
     machine = db.get_machine(machine_id)
     if not machine:
         logger.warning(f"[SYNC] Machine {machine_id} not found locally.")
@@ -113,8 +111,7 @@ def push_machine_status(machine_id):
     except Exception as e:
         logger.error(f"[SYNC] Machine status push failed: {e}")
 
-def push_user_status(csu_id):
-    db = LocalDB()
+def push_user_status(db, csu_id):
     user = db.get_user(csu_id)
     if not user:
         logger.warning(f"[SYNC] User {csu_id} not found locally.")

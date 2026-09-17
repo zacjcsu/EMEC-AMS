@@ -3,11 +3,8 @@
 import time
 import uuid
 import logging
-from lcd.lcd import LCD
 from config.constants import MACHINE_ID, CARD_GRACE_PERIOD_DEFAULT
-from db.local_db import LocalDB
 from db.azure_sync import sync_session_to_azure, push_user_status, push_machine_status
-from relay.controller import RelayController
 from config.constants import (
     STATUS_NEUTRAL, STATUS_IN_USE, STATUS_OFFLINE, STATUS_MAINTENANCE, LCD_LINE_DELAY
 )
@@ -15,10 +12,10 @@ from config.constants import (
 logger = logging.getLogger("session")
 
 class SessionManager:
-    def __init__(self):
-        self.db = LocalDB()
-        self.lcd = LCD()
-        self.relay = RelayController()
+    def __init__(self, db, lcd, relay):
+        self.db = db
+        self.lcd = lcd
+        self.relay = relay
         self._reset_session_state()
 
     def _reset_session_state(self):
@@ -35,8 +32,8 @@ class SessionManager:
     def _sync_machine_status(self, status, csu_id):
         self.db.update_machine_status(MACHINE_ID, status)
         self.db.update_machine_heartbeat(MACHINE_ID)
-        push_user_status(csu_id)
-        push_machine_status(MACHINE_ID)
+        push_user_status(self.db, csu_id)
+        push_machine_status(self.db, MACHINE_ID)
 
     def start_session(self, csu_id, display_name):
         if not self.active_session_id:

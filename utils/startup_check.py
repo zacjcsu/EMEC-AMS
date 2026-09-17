@@ -5,7 +5,6 @@ import time
 import socket
 import subprocess
 import logging
-from lcd.lcd import LCD
 from config.constants import (
     LCD_MESSAGES,
     STATUS_MAINTENANCE,
@@ -16,7 +15,6 @@ from config.constants import (
     LCD_LINE_DELAY,
     DEVICE_ID as device_id
 )
-from db.local_db import LocalDB
 from db.azure_sync import sync_local_from_azure, push_machine_status
 
 
@@ -35,10 +33,7 @@ def get_public_ip():
     except:
         return "0.0.0.0"
 
-def startup_sequence():
-    lcd = LCD()
-    db = LocalDB()
-
+def startup_sequence(lcd, db):
     logger.info("[STEP] Starting system checks...")
 
     if not check_internet():
@@ -63,7 +58,7 @@ def startup_sequence():
     if not machine:
         lcd.display(f"Machine {MACHINE_ID}", "not registered", color="red")
         db.insert_machine_if_missing(MACHINE_ID, MACHINE_NAME, MACHINE_TYPE)
-        push_machine_status(MACHINE_ID)
+        push_machine_status(db, MACHINE_ID)
         logger.warning(f"[WARN] Machine {MACHINE_ID} not found. Inserting default.")
 
     machine = db.get_machine(MACHINE_ID)
@@ -79,7 +74,7 @@ def startup_sequence():
     logger.info(f"[PASS] Machine heartbeat updated.")
 
     db.update_machine_ip(MACHINE_ID, device_ip)
-    push_machine_status(MACHINE_ID)
+    push_machine_status(db, MACHINE_ID)
     logger.info(f"[PASS] Machine Status updated")
 
     lcd.display(*LCD_MESSAGES["start"])

@@ -4,6 +4,9 @@ from dotenv import load_dotenv
 load_dotenv()
 import os
 import json
+import logging
+
+logger = logging.getLogger("constants")
 
 # === Device ID (CPU Serial) ===
 def get_cpu_serial():
@@ -12,7 +15,8 @@ def get_cpu_serial():
             for line in f:
                 if line.startswith("Serial"):
                     return line.strip().split(":")[1].strip()
-    except:
+    except Exception as e:
+        logger.warning(f"Could not read CPU serial from /proc/cpuinfo: {e}")
         return "0000000000000000"
 
 DEVICE_ID = get_cpu_serial()
@@ -27,7 +31,8 @@ def load_machine_config():
                 data.get("machine_name", "Unnamed Machine"),
                 data.get("machine_type", "Unknown Type")
             )
-    except:
+    except Exception as e:
+        logger.warning(f"Could not load config/config.json: {e}")
         return ("UNKNOWN", "Unnamed Machine", "Unknown Type")
 
 MACHINE_ID, MACHINE_NAME, MACHINE_TYPE = load_machine_config()

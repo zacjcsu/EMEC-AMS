@@ -30,6 +30,8 @@ formatter = logging.Formatter(
 handler.setFormatter(formatter)
 logging.basicConfig(level=logging.INFO, handlers=[handler])
 
+logger = logging.getLogger("main")
+
 lcd = LCD()
 db = LocalDB()
 relay = RelayController()
@@ -48,34 +50,35 @@ signal.signal(signal.SIGINT, exit_handler)
 
 def main():
     while True:
-        # PHASE 1 Startup
-        if not startup_sequence(lcd, db):
+        try:
+            # PHASE 1 Startup
+            if not startup_sequence(lcd, db):
+                time.sleep(5)
+                continue
+
+            # PHASE 2 Scan for CSU ID
+            while True:
+                scan = reader.read_card()
+                if scan:
+                    uid_num, csu_id = scan
+                    validated_csu_id, display_name = validate_card(csu_id, uid_num, db, lcd, relay)
+                    if validated_csu_id:
+                        break
+                    else:
+                        startup_sequence(lcd, db)
+                time.sleep(CARD_POLL_INTERVAL)
+
+            # PHASE 3 Start Session
+            session_mgr.start_session(validated_csu_id, display_name)
+
+            # PHASE 4 Wait for card removal
+            session_mgr.wait_for_card_removal(reader)
+
+            # PHASE 5 Grace Period Logic
+            session_mgr.handle_grace_period(reader)
+        except Exception:
+            logger.exception("[MAIN] Unhandled error in main loop; recovering.")
             time.sleep(5)
-            continue
-
-        # PHASE 2 Scan for CSU ID
-        while True:
-            scan = reader.read_card()
-            if scan:
-                uid_num, csu_id = scan
-                validated_csu_id, display_name = validate_card(csu_id, uid_num, db, lcd, relay)
-                if validated_csu_id:
-                    break
-                else:
-                    startup_sequence(lcd, db)
-            time.sleep(CARD_POLL_INTERVAL)
-
-        # PHASE 3 Start Session
-        session_mgr.start_session(validated_csu_id, display_name)
-
-        # PHASE 4 Wait for card removal
-        session_mgr.wait_for_card_removal(reader)
-
-        # PHASE 5 Grace Period Logic
-        outcome = session_mgr.handle_grace_period(reader)
-
-        # PHASE 6 Restart loop regardless of outcome
-        continue
 
 if __name__ == "__main__":
     main()

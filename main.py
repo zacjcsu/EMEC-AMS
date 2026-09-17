@@ -60,7 +60,6 @@ def main():
                 if validated_csu_id:
                     break
                 else:
-                    lcd.clear()
                     startup_sequence()
             time.sleep(CARD_POLL_INTERVAL)
 

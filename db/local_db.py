@@ -2,12 +2,15 @@
 
 import sqlite3
 import os
+import logging
 from datetime import datetime
 from config.constants import LOCAL_DB_PATH
 from create_local_db import create_local_db
 from config.constants import (
     STATUS_NEUTRAL, STATUS_IN_USE, STATUS_OFFLINE, STATUS_MAINTENANCE
 )
+
+logger = logging.getLogger("local_db")
 
 
 class LocalDB:

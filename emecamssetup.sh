@@ -160,10 +160,6 @@ if [[ -r /proc/device-tree/model ]]; then
 fi
 info "Device: ${PI_MODEL}"
 
-IS_PI5=0
-[[ "$PI_MODEL" == *"Raspberry Pi 5"* ]] && IS_PI5=1
-(( IS_PI5 )) && info "Pi 5 detected: will substitute rpi-lgpio for RPi.GPIO."
-
 step "Requesting sudo access up front"
 if ! sudo -n true 2>/dev/null; then
     (( CAN_PROMPT )) || die "sudo needs a password but there is no terminal to ask on. Run from an interactive shell, or configure passwordless sudo for ${APP_USER}."
@@ -439,14 +435,10 @@ else
     warn "No requirements.txt found; skipping."
 fi
 
-if (( IS_PI5 )); then
-    # RPi.GPIO installs on a Pi 5 but fails at runtime. rpi-lgpio is a drop-in
-    # replacement that provides the same 'RPi.GPIO' module name.
-    "${VENV_DIR}/bin/pip" uninstall -y -q RPi.GPIO rpi-gpio 2>/dev/null || true
-    "${VENV_DIR}/bin/pip" install -q rpi-lgpio \
-        && ok "Installed rpi-lgpio (Pi 5 replacement for RPi.GPIO)" \
-        || warn "Could not install rpi-lgpio; GPIO will fail on this Pi 5."
-fi
+"${VENV_DIR}/bin/pip" uninstall -y -q RPi.GPIO rpi-gpio 2>/dev/null || true
+"${VENV_DIR}/bin/pip" install -q rpi-lgpio \
+    && ok "Installed rpi-lgpio (replaces RPi.GPIO)" \
+    || warn "Could not install rpi-lgpio; GPIO will fail."
 
 # spidev is required by mfrc522 and is easy to miss.
 "${VENV_DIR}/bin/python" -c 'import spidev' 2>/dev/null \

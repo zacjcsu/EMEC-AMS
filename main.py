@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # main.py
 
+from utils import hardware_stubs  # noqa: F401  (must be imported first, see utils/hardware_stubs.py)
 from utils.startup_check import startup_sequence
 from rfid.reader import RFIDReader
 from rfid.validator import validate_card

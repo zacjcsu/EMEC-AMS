@@ -334,6 +334,9 @@ fetch_from_git() {
     info "Fetching ${SOURCE_REPO} (branch ${SOURCE_BRANCH})..."
     git -C "$APP_DIR" fetch --quiet origin "$SOURCE_BRANCH" || die "Fetch failed."
     git -C "$APP_DIR" reset --hard --quiet FETCH_HEAD || die "Checkout failed."
+    # So a plain `git pull` / `git status` works when someone SSHes in.
+    git -C "$APP_DIR" branch --set-upstream-to="origin/${SOURCE_BRANCH}" \
+        "$SOURCE_BRANCH" >/dev/null 2>&1 || true
     ok "At $(git -C "$APP_DIR" log -1 --pretty='%h %s')"
 
     # hardware/ is KiCad and gerbers. skip-worktree stops reset restoring it.

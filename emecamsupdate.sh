@@ -191,6 +191,8 @@ sync_code() {
 
     # reset, not pull: no merge conflicts, and untracked files are left alone.
     as_app git -C "$APP_DIR" reset --hard --quiet FETCH_HEAD
+    as_app git -C "$APP_DIR" branch --set-upstream-to="origin/${BRANCH}" \
+        "$BRANCH" >/dev/null 2>&1 || true
     log "Now at $(as_app git -C "$APP_DIR" log -1 --pretty='%h %s')"
 
     after="$(sha256sum "${APP_DIR}/requirements.txt" 2>/dev/null | cut -d' ' -f1 || true)"

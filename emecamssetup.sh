@@ -610,6 +610,15 @@ fi
 # Done
 # ---------------------------------------------------------------------------
 
+# The updater's units are part of a provisioned Pi, so install them here rather
+# than leaving it as a step to remember. INSTALL_UPDATER=0 skips it.
+if [[ "${INSTALL_UPDATER:-1}" == "1" && -f "${APP_DIR}/emecamsupdate.sh" ]]; then
+    step "Installing the updater's systemd units"
+    sudo bash "${APP_DIR}/emecamsupdate.sh" --install >/dev/null \
+        && ok "emec-ams-update timer and path unit enabled" \
+        || warn "Could not install the updater units; run: sudo ${APP_DIR}/emecamsupdate.sh --install"
+fi
+
 if (( REBOOT_NEEDED )); then
     HEADLINE="${C_YELLOW}${C_BOLD}Install complete. Reboot required.${C_RESET}"
 elif systemctl is-active --quiet "${SERVICE_NAME}.service"; then

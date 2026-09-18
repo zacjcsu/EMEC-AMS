@@ -107,7 +107,11 @@ EOF
 # Preflight
 # ---------------------------------------------------------------------------
 
-[[ "$(id -u)" -eq 0 ]] || die "Must run as root. It is started by systemd; to run by hand use: sudo systemctl start emec-ams-update.service"
+if [[ "$(id -u)" -ne 0 ]]; then
+    die "Must run as root.
+      Units installed:     sudo systemctl start emec-ams-update.service
+      Units not installed: sudo ${APP_DIR}/emecamsupdate.sh --install"
+fi
 [[ -d "$APP_DIR" ]] || die "${APP_DIR} does not exist."
 
 mkdir -p "${APP_DIR}/logs"

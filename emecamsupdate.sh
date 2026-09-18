@@ -199,7 +199,6 @@ sync_code() {
 
     verify_hardware_modules
 
-    compat_fix
     prune_hardware
     chown -R "${APP_USER}:${APP_USER}" "$APP_DIR"
     return 0
@@ -294,18 +293,6 @@ prune_hardware() {
             | as_app xargs -0 -r git -C "$APP_DIR" update-index --skip-worktree 2>/dev/null || true
         rm -rf "${APP_DIR}/hardware"
         log "Pruned hardware/ (KiCad and gerbers, not needed at runtime)."
-    fi
-}
-
-compat_fix() {
-    # lcd/RGB1602.py imports `smbus`, requirements.txt ships `smbus2`. A
-    # reset --hard reverts the fix every time, so re-apply it. Harmless once
-    # the import is corrected in the repo.
-    local f="${APP_DIR}/lcd/RGB1602.py"
-    if [[ -f "$f" ]] && grep -q '^from smbus import SMBus' "$f" \
-       && ! "${VENV_DIR}/bin/python" -c 'import smbus' 2>/dev/null; then
-        sed -i 's/^from smbus import SMBus/from smbus2 import SMBus/' "$f"
-        log "Re-applied smbus2 import fix to lcd/RGB1602.py (fix this upstream)."
     fi
 }
 

@@ -300,7 +300,7 @@ export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update -qq
 sudo apt-get install -y -qq \
     git curl unzip rsync ca-certificates \
-    python3 python3-venv python3-dev python3-pip python3-smbus \
+    python3 python3-venv python3-dev python3-pip \
     build-essential i2c-tools >/dev/null
 ok "Base packages installed"
 
@@ -487,22 +487,6 @@ chmod +x "${APP_DIR}/main.py" 2>/dev/null || true
 # ---------------------------------------------------------------------------
 # 7b. Known compatibility fixes
 # ---------------------------------------------------------------------------
-
-step "Compatibility fixes"
-
-# lcd/RGB1602.py does `from smbus import SMBus`, but requirements.txt ships
-# smbus2, which provides the module name `smbus2`, not `smbus`. That import
-# only resolves if the system-wide python3-smbus is visible, which it is on the
-# Desktop image and is not inside a clean venv. smbus2 is API-compatible for
-# the single call this file makes (write_byte_data), so rewrite the import.
-RGB_FILE="${APP_DIR}/lcd/RGB1602.py"
-if [[ -f "$RGB_FILE" ]] && grep -q '^from smbus import SMBus' "$RGB_FILE"; then
-    if ! "${VENV_DIR}/bin/python" -c 'import smbus' 2>/dev/null; then
-        sed -i 's/^from smbus import SMBus/from smbus2 import SMBus/' "$RGB_FILE"
-        warn "Patched lcd/RGB1602.py: 'from smbus import SMBus' -> 'from smbus2 import SMBus'."
-        warn "Fix this upstream in the repo so the patch is not needed on the next Pi."
-    fi
-fi
 
 step "Verifying the install"
 

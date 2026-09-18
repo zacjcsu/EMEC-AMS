@@ -333,9 +333,42 @@ sudo chown "${APP_USER}:${APP_USER}" "$APP_DIR"
 STAGE="$(mktemp -d)"
 trap 'kill "$SUDO_KEEPALIVE" 2>/dev/null || true; rm -rf "$STAGE"' EXIT
 
+# git mode works IN PLACE and leaves a real repo behind, so the Pi can
+# `git pull` afterwards and emecamsupdate.sh has nothing to adopt. It handles an
+# empty directory, a populated non-git one, and an existing clone identically.
+# reset --hard never touches untracked files, so .env, config.json, .venv/,
+# logs/ and data/ all survive without needing exclude lists.
+fetch_from_git() {
+    if [[ ! -d "${APP_DIR}/.git" ]]; then
+        info "Initialising a git repo in ${APP_DIR}..."
+        git -C "$APP_DIR" init -q -b "$SOURCE_BRANCH"
+    fi
+    if git -C "$APP_DIR" remote get-url origin >/dev/null 2>&1; then
+        git -C "$APP_DIR" remote set-url origin "$SOURCE_REPO"
+    else
+        git -C "$APP_DIR" remote add origin "$SOURCE_REPO"
+    fi
+
+    info "Fetching ${SOURCE_REPO} (branch ${SOURCE_BRANCH})..."
+    git -C "$APP_DIR" fetch --quiet origin "$SOURCE_BRANCH" || die "Fetch failed."
+    git -C "$APP_DIR" reset --hard --quiet FETCH_HEAD || die "Checkout failed."
+    ok "At $(git -C "$APP_DIR" log -1 --pretty='%h %s')"
+
+    # hardware/ is ~8.7MB of KiCad and gerbers the Pi never runs. skip-worktree
+    # keeps a later reset from restoring it.
+    if [[ -d "${APP_DIR}/hardware" ]]; then
+        git -C "$APP_DIR" ls-files -z hardware \
+            | xargs -0 -r git -C "$APP_DIR" update-index --skip-worktree 2>/dev/null || true
+        rm -rf "${APP_DIR}/hardware"
+        ok "Pruned hardware/ (not needed at runtime)"
+    fi
+}
+
+# Drive mode is the offline fallback. A zip has no git history, so this one
+# still stages and rsyncs, and leaves a non-git directory behind.
 fetch_from_drive() {
-    [[ -n "$SOURCE_DRIVE_ID" && "$SOURCE_DRIVE_ID" != "PUT_THE_ZIP_FILE_ID_HERE" ]] \
-        || die "SOURCE_DRIVE_ID is not set. Edit the script or pass SOURCE_DRIVE_ID=<id>."
+    [[ -n "$SOURCE_DRIVE_ID" ]] \
+        || die "SOURCE_DRIVE_ID is not set. Pass SOURCE_DRIVE_ID=<id>."
 
     local zip="${STAGE}/emec-ams.zip"
     info "Downloading zip from Google Drive..."
@@ -345,49 +378,33 @@ fetch_from_drive() {
 
     # A Drive permission error comes back as an HTML page, not a zip.
     unzip -tq "$zip" >/dev/null 2>&1 \
-        || die "Downloaded file is not a valid zip (Drive probably returned an error page). Set sharing to 'Anyone with the link'."
+        || die "Downloaded file is not a valid zip (Drive probably returned an error page)."
 
     unzip -q -o "$zip" -d "${STAGE}/unpacked"
-    ok "Zip extracted"
+
+    local main_py src_root
+    main_py="$(find "${STAGE}/unpacked" -name main.py -not -path '*/.git/*' -print -quit)"
+    [[ -n "$main_py" ]] || die "Could not find main.py in the zip."
+    src_root="$(dirname "$main_py")"
+    info "Source root: ${src_root}"
+
+    rsync -a --delete \
+        --exclude '.venv/' --exclude 'logs/' --exclude 'data/' \
+        --exclude '.env' --exclude '.gitignore' --exclude 'config/config.json' \
+        --exclude '.git/' --exclude 'hardware/' \
+        --exclude '__pycache__/' --exclude '*.pyc' \
+        "${src_root}/" "${APP_DIR}/" \
+        || die "Failed to copy the code into ${APP_DIR}."
+    ok "Code in place (no git repo: Drive zips have no history)"
+    warn "emecamsupdate.sh will convert this to a real repo on its first run."
 }
-
-fetch_from_git() {
-    info "Cloning ${SOURCE_REPO} (branch ${SOURCE_BRANCH})..."
-    git clone --depth 1 --branch "$SOURCE_BRANCH" "$SOURCE_REPO" "${STAGE}/unpacked/repo" \
-        || die "Clone failed."
-    ok "Repository cloned"
-}
-
-case "$SOURCE_MODE" in
-    drive) fetch_from_drive ;;
-    git)   fetch_from_git ;;
-    *)     die "SOURCE_MODE must be 'drive' or 'git', got '${SOURCE_MODE}'." ;;
-esac
-
-# Locate main.py wherever it landed inside the archive or clone.
-MAIN_PY="$(find "${STAGE}/unpacked" -name main.py -not -path '*/.git/*' -print -quit)"
-[[ -n "$MAIN_PY" ]] || die "Could not find main.py in the downloaded code."
-SRC_ROOT="$(dirname "$MAIN_PY")"
-info "Source root: ${SRC_ROOT}"
 
 step "Installing code into ${APP_DIR}"
-
-# Preserve anything that is per-Pi state: the venv, logs, local database, and
-# the config files this script writes below.
-rsync -a --delete \
-    --exclude '.venv/' \
-    --exclude 'logs/' \
-    --exclude 'data/' \
-    --exclude '.env' \
-    --exclude '.gitignore' \
-    --exclude 'config/config.json' \
-    --exclude '.git/' \
-    --exclude 'hardware/' \
-    --exclude '__pycache__/' \
-    --exclude '*.pyc' \
-    "${SRC_ROOT}/" "${APP_DIR}/" \
-    || die "Failed to copy the code into ${APP_DIR}."
-ok "Code in place"
+case "$SOURCE_MODE" in
+    git)   fetch_from_git ;;
+    drive) fetch_from_drive ;;
+    *)     die "SOURCE_MODE must be 'git' or 'drive', got '${SOURCE_MODE}'." ;;
+esac
 
 mkdir -p "${APP_DIR}/logs" "${APP_DIR}/data" "${APP_DIR}/config"
 touch "${APP_DIR}/logs/errors.log" "${APP_DIR}/logs/sync.log"

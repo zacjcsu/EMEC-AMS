@@ -1,9 +1,9 @@
-# On a Raspberry Pi, RPi.GPIO / smbus / smbus2 / mfrc522 are installed and
-# this module does nothing. Elsewhere, it registers no-op fakes in
-# sys.modules under those names so code can `import RPi.GPIO` etc.
-# unchanged. Must be imported before any of those modules.
+# Off Linux (Windows/macOS dev machines), registers no-op fakes in sys.modules
+# for RPi.GPIO / smbus / smbus2 / mfrc522 so the app can be imported and run
+# without hardware. Must be imported before any of those modules.
 
 import logging
+import os
 import sys
 import types
 
@@ -106,6 +106,12 @@ def _install_fake_mfrc522():
 
 
 def install():
+    if sys.platform.startswith("linux") and os.getenv("EMEC_HARDWARE_STUBS") != "1":
+        logger.debug(
+            "Linux detected; not installing hardware stubs. A missing hardware "
+            "module will raise ImportError, which is intended."
+        )
+        return
     _install_fake_gpio()
     _install_fake_smbus()
     _install_fake_mfrc522()

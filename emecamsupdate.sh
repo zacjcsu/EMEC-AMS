@@ -52,7 +52,7 @@ StartLimitBurst=5
 
 [Service]
 Type=oneshot
-ExecStart=${APP_DIR}/emecamsupdate.sh
+ExecStart=/bin/bash ${APP_DIR}/emecamsupdate.sh
 # Room for a pip install on a slow link.
 TimeoutStartSec=900
 EOF

@@ -487,7 +487,7 @@ if "${VENV_DIR}/bin/python" -c 'import RPi,pathlib,sys; sys.exit(0 if list(pathl
     "${VENV_DIR}/bin/pip" uninstall -y -q RPi.GPIO rpi-gpio 2>/dev/null || true
 fi
 
-chmod +x "${APP_DIR}/main.py" 2>/dev/null || true
+chmod +x "${APP_DIR}/main.py" "${APP_DIR}/emecamsupdate.sh" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # 7b. Known compatibility fixes

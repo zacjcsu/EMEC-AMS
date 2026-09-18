@@ -21,8 +21,7 @@ os.makedirs("logs", exist_ok=True)
 file_handler = TimedRotatingFileHandler(
     "logs/sync.log", when="D", interval=1, backupCount=7
 )
-# Plain stdout handler: systemd captures the service's stdout into the
-# journal (journalctl -u emec-ams), so this is what gets it there.
+# stdout reaches the journal via systemd.
 stream_handler = logging.StreamHandler()
 formatter = logging.Formatter(
     '[%(asctime)s] %(levelname)s [%(name)s]: %(message)s',

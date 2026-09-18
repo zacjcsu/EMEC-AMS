@@ -1,18 +1,10 @@
 #!/usr/bin/env bash
 #
-# EMEC Access Management System - Raspberry Pi provisioning script
+# EMEC-AMS Raspberry Pi provisioning. Safe to re-run.
 #
-# Usage (recommended, works with interactive prompts):
 #   curl -fsSL https://raw.githubusercontent.com/zacjcsu/EMEC-AMS/main/emecamssetup.sh | bash
 #
-# Fully unattended:
-#   curl -fsSL https://raw.githubusercontent.com/zacjcsu/EMEC-AMS/main/emecamssetup.sh \
-#     | MACHINE_ID=lathe-001 MACHINE_NAME="Manual Lathe 1" MACHINE_TYPE="Manual Lathe" \
-#       AZURE_HOST='...' AZURE_USER='...' AZURE_DATABASE='...' AZURE_PASSWORD='...' \
-#       bash -s -- --yes
-#
-# Safe to re-run: re-running is also how you update a Pi to the latest commit.
-# Existing config, venv, logs and local DB are preserved.
+# Unattended: pass MACHINE_ID, MACHINE_NAME, MACHINE_TYPE, AZURE_* and --yes.
 
 set -euo pipefail
 
@@ -26,15 +18,10 @@ VENV_DIR="${APP_DIR}/.venv"
 SERVICE_NAME="emec-ams"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
-# Where the application code comes from: "git" or "drive".
-#   git   - clones from GitHub (set SOURCE_REPO / SOURCE_BRANCH). Default.
-#   drive - downloads a .zip from Google Drive (set SOURCE_DRIVE_ID). Fallback.
+# "git" (SOURCE_REPO/SOURCE_BRANCH) or "drive" (SOURCE_DRIVE_ID).
 SOURCE_MODE="${SOURCE_MODE:-git}"
 
-# Google Drive file ID of emec-ams.zip. Only used when SOURCE_MODE=drive.
-# Left blank on purpose: that zip contains a .env, so publishing its id here
-# would publish a pointer to the credentials. Pass SOURCE_DRIVE_ID=<id> if you
-# ever need the Drive fallback.
+# Blank on purpose: the zip contains a .env, so the id is a pointer to secrets.
 SOURCE_DRIVE_ID="${SOURCE_DRIVE_ID:-}"
 
 SOURCE_REPO="${SOURCE_REPO:-https://github.com/zacjcsu/EMEC-AMS.git}"
@@ -45,11 +32,8 @@ TIMEZONE="${TIMEZONE:-America/Denver}"
 KEYBOARD_LAYOUT="${KEYBOARD_LAYOUT:-us}"
 WIFI_COUNTRY="${WIFI_COUNTRY:-US}"
 
-# Azure MySQL connection, written to ${APP_DIR}/.env at mode 600.
-# This file is public, so it holds no host, user, database name or password.
-# All of those are prompted for at run time, or passed as environment variables
-# for unattended runs. Only the CA path, a standard OS location rather than a
-# credential, keeps a default.
+# Written to ${APP_DIR}/.env at mode 600. Prompted for, or passed as env vars.
+# This file is public, so only the CA path keeps a default.
 DEF_AZURE_SSL_CA="/etc/ssl/certs/ca-certificates.crt"
 
 AZURE_HOST="${AZURE_HOST:-}"
@@ -79,9 +63,8 @@ ok()   { printf '    %s[ok]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
 warn() { printf '    %s[warn]%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
 die()  { printf '\n%s[error]%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
 
-# Prompts read from the controlling terminal, not stdin, so the script still
-# works when it is piped into bash. /dev/tty can exist but be unopenable (no
-# controlling terminal), so test that it actually opens rather than trusting -r.
+# Read prompts from the tty, not stdin, so `curl | bash` still works.
+# /dev/tty can exist but not open, so test opening it rather than -r.
 TTY=""
 if [[ -e /dev/tty ]] && ( : </dev/tty ) 2>/dev/null; then
     TTY=/dev/tty
@@ -333,11 +316,8 @@ sudo chown "${APP_USER}:${APP_USER}" "$APP_DIR"
 STAGE="$(mktemp -d)"
 trap 'kill "$SUDO_KEEPALIVE" 2>/dev/null || true; rm -rf "$STAGE"' EXIT
 
-# git mode works IN PLACE and leaves a real repo behind, so the Pi can
-# `git pull` afterwards and emecamsupdate.sh has nothing to adopt. It handles an
-# empty directory, a populated non-git one, and an existing clone identically.
-# reset --hard never touches untracked files, so .env, config.json, .venv/,
-# logs/ and data/ all survive without needing exclude lists.
+# In place, leaving a real repo. reset --hard ignores untracked files, so
+# .env, config.json, .venv/, logs/ and data/ survive.
 fetch_from_git() {
     if [[ ! -d "${APP_DIR}/.git" ]]; then
         info "Initialising a git repo in ${APP_DIR}..."
@@ -354,8 +334,7 @@ fetch_from_git() {
     git -C "$APP_DIR" reset --hard --quiet FETCH_HEAD || die "Checkout failed."
     ok "At $(git -C "$APP_DIR" log -1 --pretty='%h %s')"
 
-    # hardware/ is ~8.7MB of KiCad and gerbers the Pi never runs. skip-worktree
-    # keeps a later reset from restoring it.
+    # hardware/ is KiCad and gerbers. skip-worktree stops reset restoring it.
     if [[ -d "${APP_DIR}/hardware" ]]; then
         git -C "$APP_DIR" ls-files -z hardware \
             | xargs -0 -r git -C "$APP_DIR" update-index --skip-worktree 2>/dev/null || true
@@ -364,8 +343,7 @@ fetch_from_git() {
     fi
 }
 
-# Drive mode is the offline fallback. A zip has no git history, so this one
-# still stages and rsyncs, and leaves a non-git directory behind.
+# Fallback. A zip has no history, so this stages and rsyncs instead.
 fetch_from_drive() {
     [[ -n "$SOURCE_DRIVE_ID" ]] \
         || die "SOURCE_DRIVE_ID is not set. Pass SOURCE_DRIVE_ID=<id>."
@@ -376,7 +354,7 @@ fetch_from_drive() {
         "https://drive.usercontent.google.com/download?id=${SOURCE_DRIVE_ID}&export=download&confirm=t" \
         -o "$zip" || die "Download failed. Check the file ID and that sharing is 'Anyone with the link'."
 
-    # A Drive permission error comes back as an HTML page, not a zip.
+    # A permission error comes back as HTML, not a zip.
     unzip -tq "$zip" >/dev/null 2>&1 \
         || die "Downloaded file is not a valid zip (Drive probably returned an error page)."
 
@@ -469,13 +447,8 @@ fi
 
 "${VENV_DIR}/bin/python" -m pip install --upgrade pip setuptools wheel -q
 
-# mfrc522 declares "Requires-Dist: RPi.GPIO", but rpi-lgpio is what we actually
-# want providing that module. pip resolves by distribution name, not module
-# name, so installing rpi-lgpio first does not satisfy it: pip fetches the real
-# RPi.GPIO anyway and it lands on top. RPi.GPIO also ships no wheel for
-# python 3.11 or aarch64, so on Bookworm it COMPILES from source, and we would
-# then delete it. Install mfrc522 with --no-deps and supply its real needs
-# ourselves, so the real RPi.GPIO is never fetched at all.
+# mfrc522 depends on RPi.GPIO; we want rpi-lgpio providing that module.
+# --no-deps skips it, then we supply the real needs ourselves.
 REQ="${APP_DIR}/requirements.txt"
 if [[ ! -f "$REQ" ]]; then
     warn "No requirements.txt found; skipping."
@@ -494,17 +467,15 @@ elif grep -qiE '^[[:space:]]*mfrc522([[:space:]]|;|$|[<>=!])' "$REQ"; then
     info "rpi-lgpio provides that module under a different distribution name,"
     info "which pip has no way to know. Nothing is actually missing."
 else
-    # mfrc522 is gone or its metadata was fixed: plain install.
+    # mfrc522 absent: plain install.
     "${VENV_DIR}/bin/pip" install -q -r "$REQ" \
         || die "pip install failed. Scroll up for the failing package."
     "${VENV_DIR}/bin/pip" install -q rpi-lgpio spidev 2>/dev/null || true
     ok "Requirements installed"
 fi
 
-# Safety net: if the real RPi.GPIO is present anyway (someone ran
-# `pip install --upgrade mfrc522` by hand), swap it back out. Uninstalling it
-# deletes the shared RPi/ directory including rpi-lgpio's files while pip still
-# records rpi-lgpio as installed, so both must go before reinstalling.
+# Swap out the real RPi.GPIO if something reinstalled it. Both must be
+# uninstalled first: they share RPi/, so removing one orphans the other.
 if compgen -G "${VENV_DIR}/lib/python*/site-packages/RPi/_GPIO*.so" >/dev/null; then
     warn "Real RPi.GPIO found; replacing it with rpi-lgpio."
     "${VENV_DIR}/bin/pip" uninstall -y -q RPi.GPIO rpi-gpio rpi-lgpio 2>/dev/null || true
@@ -538,10 +509,7 @@ step "Verifying the install"
 VERIFY_OUT="$(cd "$APP_DIR" && "${VENV_DIR}/bin/python" - <<'PYCHECK'
 import importlib
 
-# utils/hardware_stubs.py replaces any of these with a silent no-op fake when
-# the real module is missing, so the app starts and appears healthy while the
-# relay never fires and the LCD never lights. That makes a missing one far more
-# dangerous than a crash. Check them WITHOUT importing hardware_stubs.
+# Import check. Deliberately does not import hardware_stubs.
 FAKEABLE = ("RPi.GPIO", "smbus2", "mfrc522", "spidev")
 OTHER = ("dotenv", "dateutil", "pymysql")
 
@@ -635,9 +603,7 @@ sudo systemctl enable "${SERVICE_NAME}.service" >/dev/null 2>&1
 ok "Service enabled"
 
 if (( REBOOT_NEEDED )); then
-    # Starting now would fail: lcd/RGB1602.py opens /dev/i2c-1 at import time,
-    # and SPI/I2C do not exist until the reboot. Leave it enabled instead of
-    # showing a failure that is not a real problem.
+    # SPI/I2C do not exist until the reboot, so starting now would just fail.
     warn "Not starting the service yet: SPI/I2C need a reboot first."
     info "It is enabled and will start automatically on boot."
 else

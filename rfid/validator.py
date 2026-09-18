@@ -25,11 +25,9 @@ def validate_card(csu_id, uid_num, db, lcd, relay):
             logger.info(f"[ACCESS] Request raised for {csu_id}")
         time.sleep(LCD_LINE_DELAY)
 
-        # After request sync, re-sync system data
         startup_sequence(lcd, db)
         return None, None
 
-    # CASE 2: Valid user with permission
     display_name = user["name"] if user["name"] else str(csu_id)
 
     lab_open, lab_close = db.get_open_close_times()
@@ -40,7 +38,6 @@ def validate_card(csu_id, uid_num, db, lcd, relay):
             open_time = datetime.strptime(lab_open, fmt).time()
             close_time = datetime.strptime(lab_close, fmt).time()
 
-            # only check if not "After Hours"
             if not db.user_has_level(csu_id, "After Hours"):
                 if not (open_time <= now <= close_time):
                     lcd.display("Access Denied", "Outside hours", color="red")

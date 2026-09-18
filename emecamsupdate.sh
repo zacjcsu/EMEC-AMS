@@ -1,23 +1,11 @@
 #!/usr/bin/env bash
 #
-# EMEC-AMS updater / first-boot provisioner
+# EMEC-AMS updater / first-boot provisioner. Install its units once:
+#     sudo emecamsupdate.sh --install
 #
-# Lives in the repo and is deployed to /home/emec/emec-ams/emecamsupdate.sh.
-# Install its systemd units once on the golden image:
-#
-#     sudo /home/emec/emec-ams/emecamsupdate.sh --install
-#
-# Then it runs from three triggers, all hitting the same unit:
-#   - boot            emec-ams-update.timer  (OnBootSec)
-#   - daily 01:00     emec-ams-update.timer  (OnCalendar, system timezone)
-#   - card scan       emec-ams-update.path   (watches .update-requested)
-#
-# Three states, decided at run time:
-#   config.json blank              -> WAIT      do nothing, exit clean
-#   config.json filled, app disabled -> PROVISION apply identity, sync, enable, reboot
-#   config.json filled, app enabled  -> UPDATE    stop, sync, start
-#
-# Safe to run at any time, from any trigger, concurrently.
+# Triggered by the timer (boot + daily 01:00) and by the .path unit.
+# Modes: blank config -> wait; filled + service disabled -> provision;
+# filled + enabled -> update.
 
 set -euo pipefail
 
@@ -58,15 +46,14 @@ install_units() {
 Description=EMEC-AMS update and first-boot provisioning
 After=network-online.target
 Wants=network-online.target
-# A path unit re-checks the moment its service exits, so a flag file left
-# behind by a bug would restart this instantly. Cap the damage.
+# Caps a restart loop if the flag is ever left behind.
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Service]
 Type=oneshot
 ExecStart=${APP_DIR}/emecamsupdate.sh
-# Long enough for a pip install on a slow link, short enough to not hang forever.
+# Room for a pip install on a slow link.
 TimeoutStartSec=900
 EOF
 
@@ -75,14 +62,13 @@ EOF
 Description=EMEC-AMS update schedule
 
 [Timer]
-# Shortly after boot, once the network has had a chance to come up.
+# After boot, once the network is likely up.
 OnBootSec=3min
-# Daily at 01:00 in the system timezone. With the Pi set to America/Denver this
-# tracks DST automatically, so it is 01:00 local year round.
+# System timezone, so DST is handled.
 OnCalendar=*-*-* 01:00:00
-# If the Pi was powered off at 01:00, run once on the next boot instead.
+# Catch up if the Pi was off at 01:00.
 Persistent=true
-# Stagger fleet-wide so twenty Pis do not hit GitHub in the same second.
+# Stagger the fleet.
 RandomizedDelaySec=300
 Unit=emec-ams-update.service
 
@@ -95,8 +81,8 @@ EOF
 Description=EMEC-AMS update requested by the application
 
 [Path]
-# main.py touches this file. systemd starts the update service in its own
-# cgroup, which is what lets it stop emec-ams without killing itself.
+# main.py touches this. Running as its own unit is what lets the updater
+# stop emec-ams without killing itself.
 PathExists=${FLAG}
 Unit=emec-ams-update.service
 
@@ -127,13 +113,11 @@ EOF
 mkdir -p "${APP_DIR}/logs"
 exec > >(tee -a "$LOGFILE") 2>&1
 
-# Clear the request flag before anything that can exit early. systemd re-checks
-# a path unit the instant its triggered service terminates, so ANY exit that
-# leaves this file behind restarts the script immediately, in a tight loop.
+# Must precede any early exit: the .path unit re-triggers the instant this
+# service ends, so a leftover flag means a restart loop.
 rm -f "$FLAG"
 
-# Serialise against a manual run overlapping the timer. systemd already
-# prevents two instances of the unit, this covers direct invocation.
+# Covers a manual run overlapping the timer.
 exec 9>"$LOCK"
 flock -n 9 || { log "Another update is already running; exiting."; exit 0; }
 
@@ -179,15 +163,13 @@ log "Machine ${MACHINE_ID} (${MACHINE_NAME}) — mode: ${MODE}"
 # ---------------------------------------------------------------------------
 
 sync_code() {
-    # Adopt the directory if the setup script rsynced it in without .git.
+    # Adopt a non-git directory (drive-mode installs).
     if [[ ! -d "${APP_DIR}/.git" ]]; then
         log "No git repo here yet; adopting ${APP_DIR} in place."
         as_app git -C "$APP_DIR" init -q -b "$BRANCH"
     fi
 
-    # REPO is authoritative. Without set-url an existing checkout would keep
-    # fetching whatever remote it was created with, so moving the repo would
-    # silently do nothing.
+    # set-url so REPO wins over whatever the checkout was created with.
     if as_app git -C "$APP_DIR" remote get-url origin >/dev/null 2>&1; then
         as_app git -C "$APP_DIR" remote set-url origin "$REPO"
     else
@@ -203,8 +185,7 @@ sync_code() {
         return 1
     fi
 
-    # reset --hard, not pull: no merge conflicts from local edits, and it never
-    # touches untracked files, so .env, config.json, .venv, logs and data stay.
+    # reset, not pull: no merge conflicts, and untracked files are left alone.
     as_app git -C "$APP_DIR" reset --hard --quiet FETCH_HEAD
     log "Now at $(as_app git -C "$APP_DIR" log -1 --pretty='%h %s')"
 
@@ -224,10 +205,7 @@ sync_code() {
     return 0
 }
 
-# utils/hardware_stubs.py swaps in silent no-op fakes for any missing hardware
-# module, so the service starts clean while the relay never fires and the LCD
-# stays dark. A missing module is worse than a crash because nothing reports it.
-# Checked without importing hardware_stubs, which would install the fakes.
+# Import check. Deliberately does not import hardware_stubs.
 HW_CHECK_PY='
 import importlib
 bad = []
@@ -277,28 +255,21 @@ verify_hardware_modules() {
 }
 
 install_python_deps() {
-    # mfrc522 declares "Requires-Dist: RPi.GPIO", but rpi-lgpio is what we want
-    # providing that module. pip resolves by distribution name, not module name,
-    # so installing rpi-lgpio first does not satisfy it. RPi.GPIO also ships no
-    # wheel for python 3.11 or aarch64, so on Bookworm it compiles from source.
-    # Install mfrc522 with --no-deps and supply its real needs ourselves, so the
-    # real RPi.GPIO is never fetched at all.
+    # mfrc522 depends on RPi.GPIO; we want rpi-lgpio providing that module.
+    # --no-deps skips it, then we supply the real needs ourselves.
     local req="${APP_DIR}/requirements.txt" tmp
     [[ -f "$req" ]] || { log "No requirements.txt; skipping dependencies."; return 0; }
 
     if grep -qiE '^[[:space:]]*mfrc522([[:space:]]|;|$|[<>=!])' "$req"; then
         tmp="$(mktemp)"
-        # This script runs as root but pip runs as APP_USER, so the filtered
-        # file must be readable by them. mktemp creates it 0600 root-owned.
+        # pip runs as APP_USER; mktemp creates this 0600 root-owned.
         chmod 0644 "$tmp"
         grep -viE '^[[:space:]]*mfrc522([[:space:]]|;|$|[<>=!])' "$req" >"$tmp" || true
         as_app "${VENV_DIR}/bin/pip" install -q -r "$tmp" || log "WARNING: pip install failed."
         rm -f "$tmp"
         as_app "${VENV_DIR}/bin/pip" install -q --no-deps mfrc522 || log "WARNING: mfrc522 install failed."
         as_app "${VENV_DIR}/bin/pip" install -q rpi-lgpio spidev || log "WARNING: rpi-lgpio/spidev install failed."
-        # pip prints "mfrc522 requires RPi.GPIO, which is not installed" on every
-        # run. That is expected and correct: rpi-lgpio provides that module under
-        # a different distribution name, which pip has no way to know.
+        # pip's "mfrc522 requires RPi.GPIO" notice is expected here.
         log "(pip's 'mfrc522 requires RPi.GPIO' notice is expected; rpi-lgpio provides it.)"
     else
         as_app "${VENV_DIR}/bin/pip" install -q -r "$req" || log "WARNING: pip install failed."
@@ -307,10 +278,8 @@ install_python_deps() {
 }
 
 ensure_gpio() {
-    # Safety net only. Nothing above installs the real RPi.GPIO any more, but a
-    # manual `pip install --upgrade mfrc522` would. Uninstalling it deletes the
-    # shared RPi/ directory including rpi-lgpio's files while pip still records
-    # rpi-lgpio as installed, so both must go before reinstalling.
+    # Swap out the real RPi.GPIO if something reinstalled it. Both must be
+    # uninstalled first: they share RPi/, so removing one orphans the other.
     compgen -G "${VENV_DIR}/lib/python*/site-packages/RPi/_GPIO*.so" >/dev/null || return 0
     log "Real RPi.GPIO found; replacing it with rpi-lgpio."
     as_app "${VENV_DIR}/bin/pip" uninstall -y -q RPi.GPIO rpi-gpio rpi-lgpio 2>/dev/null || true
@@ -319,9 +288,7 @@ ensure_gpio() {
 }
 
 prune_hardware() {
-    # hardware/ is ~8.7MB of KiCad and gerber files, none of which the Pi runs.
-    # git reset --hard restores it every sync, so tell git to ignore that path
-    # and delete it. skip-worktree survives future resets.
+    # hardware/ is KiCad and gerbers. skip-worktree stops reset restoring it.
     if [[ -d "${APP_DIR}/hardware" ]]; then
         as_app git -C "$APP_DIR" ls-files -z hardware \
             | as_app xargs -0 -r git -C "$APP_DIR" update-index --skip-worktree 2>/dev/null || true
@@ -405,7 +372,7 @@ update() {
     log "Stopping ${SERVICE}."
     systemctl stop "$SERVICE" || true
 
-    # Whatever happens below, the machine must not be left with the app down.
+    # Never leave the app down.
     trap 'log "Starting ${SERVICE}."; systemctl start "$SERVICE" || log "ERROR: could not start ${SERVICE}."' EXIT
 
     sync_code || log "Continuing with the code already present."

@@ -18,16 +18,21 @@ from logging.handlers import TimedRotatingFileHandler
 import os
 
 os.makedirs("logs", exist_ok=True)
-handler = TimedRotatingFileHandler(
+file_handler = TimedRotatingFileHandler(
     "logs/sync.log", when="D", interval=1, backupCount=7
 )
+# Plain stdout handler: systemd captures the service's stdout into the
+# journal (journalctl -u emec-ams), so this is what gets it there.
+stream_handler = logging.StreamHandler()
 formatter = logging.Formatter(
     '[%(asctime)s] %(levelname)s [%(name)s]: %(message)s',
     datefmt="%Y-%m-%d %H:%M:%S"
 )
-handler.setFormatter(formatter)
-logging.basicConfig(level=logging.INFO, handlers=[handler])
+file_handler.setFormatter(formatter)
+stream_handler.setFormatter(formatter)
+logging.basicConfig(level=logging.INFO, handlers=[file_handler, stream_handler])
 logger = logging.getLogger("main")
+logger.info("[STARTUP] EMEC-AMS starting (machine_id=%s)", MACHINE_ID)
 
 lcd = LCD()
 db = LocalDB()

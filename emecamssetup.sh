@@ -365,7 +365,7 @@ rsync -a --delete \
 ok "Code in place"
 
 mkdir -p "${APP_DIR}/logs" "${APP_DIR}/data" "${APP_DIR}/config"
-touch "${APP_DIR}/logs/errors.log" "${APP_DIR}/logs/sync.log"
+touch "${APP_DIR}/logs/sync.log"
 
 # ---------------------------------------------------------------------------
 # 6. Config files
@@ -522,8 +522,8 @@ Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
 
-StandardOutput=append:${APP_DIR}/logs/errors.log
-StandardError=append:${APP_DIR}/logs/errors.log
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -554,7 +554,7 @@ ${C_GREEN}${C_BOLD}Setup complete.${C_RESET}
   Service     ${SERVICE_NAME}.service
 
   Live logs      journalctl -u ${SERVICE_NAME}.service -f
-  App logs       tail -f ${APP_DIR}/logs/errors.log ${APP_DIR}/logs/sync.log
+  App logs       tail -f ${APP_DIR}/logs/sync.log
   Restart        sudo systemctl restart ${SERVICE_NAME}.service
   I2C check      i2cdetect -y 1
   SPI check      ls -l /dev/spidev*

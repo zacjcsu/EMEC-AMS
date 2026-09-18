@@ -9,10 +9,11 @@ AUTH_KEY = [0x4A, 0x1E, 0xD9, 0x40, 0xF4, 0x4B]  # CSU card sector key
 SECTOR = 1  # Sector containing CSU ID
 
 class RFIDReader:
-    def __init__(self):
+    def __init__(self, leds=None):
         GPIO.setwarnings(False)
         GPIO.setmode(GPIO.BOARD)
-        self.reader = MFRC522()
+        self.leds = leds
+        self.reader = MFRC522(pin_rst=22)
 
     def uid_to_number(self, uid):
         num = 0
@@ -28,6 +29,11 @@ class RFIDReader:
         (status, uid) = self.reader.MFRC522_Anticoll()
         if status != self.reader.MI_OK:
             return None
+
+        # Before the auth attempt, so a rejected card still lights D1 and
+        # "the reader never saw it" is distinguishable from "it was refused".
+        if self.leds:
+            self.leds.reader_blink()
 
         self.reader.MFRC522_SelectTag(uid)
         block_addr = SECTOR * 4

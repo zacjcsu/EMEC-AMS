@@ -7,6 +7,7 @@ from rfid.validator import validate_card
 from relay.session_manager import SessionManager
 from relay.controller import RelayController
 from lcd.lcd import LCD
+from utils.leds import StatusLEDs
 import time
 import signal
 import sys
@@ -36,15 +37,20 @@ logger.info("[STARTUP] EMEC-AMS starting (machine_id=%s)", MACHINE_ID)
 lcd = LCD()
 db = LocalDB()
 relay = RelayController()
-reader = RFIDReader()
+leds = StatusLEDs()
+reader = RFIDReader(leds=leds)
 session_mgr = SessionManager(db, lcd, relay)
 
 def exit_handler(sig, frame):
+    # De-energise first: everything below can raise, and the machine must not
+    # be left live by a failed shutdown.
+    relay.turn_off()
     lcd.display("Shutting down...")
     db.update_machine_status(MACHINE_ID, STATUS_OFFLINE)
     db.update_machine_heartbeat(MACHINE_ID)
     push_machine_status(db, MACHINE_ID)
     lcd.clear()
+    leds.stop()
     sys.exit(0)
 
 signal.signal(signal.SIGINT, exit_handler)

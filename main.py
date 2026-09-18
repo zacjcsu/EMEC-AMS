@@ -49,6 +49,7 @@ def exit_handler(sig, frame):
     sys.exit(0)
 
 signal.signal(signal.SIGINT, exit_handler)
+signal.signal(signal.SIGTERM, exit_handler)
 
 def main():
     while True:

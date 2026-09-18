@@ -192,7 +192,7 @@ sync_code() {
     after="$(sha256sum "${APP_DIR}/requirements.txt" 2>/dev/null | cut -d' ' -f1 || true)"
     if [[ "$before" != "$after" || ! -x "${VENV_DIR}/bin/python" ]]; then
         log "requirements.txt changed (or no venv); installing dependencies."
-        [[ -x "${VENV_DIR}/bin/python" ]] || as_app python3 -m venv "$VENV_DIR"
+        [[ -x "${VENV_DIR}/bin/python" ]] || as_app python3 -m venv --system-site-packages "$VENV_DIR"
         install_python_deps
     fi
     ensure_gpio
@@ -204,7 +204,7 @@ sync_code() {
     return 0
 }
 
-# Import check. Deliberately does not import hardware_stubs.
+# Import check.
 HW_CHECK_PY='
 import importlib
 bad = []
@@ -247,8 +247,7 @@ verify_hardware_modules() {
     if [[ -z "$out" ]]; then
         log "Repaired; all hardware modules now present."
     else
-        log "WARNING: STILL MISSING after repair. hardware_stubs.py will substitute"
-        log "silent no-op fakes, so this machine will look healthy and do nothing:"
+        log "WARNING: STILL MISSING after repair. The service will not start:"
         printf '%s\n' "$out" | tr '|' '\n' | sed 's/^/      /'
     fi
 }
@@ -267,23 +266,19 @@ install_python_deps() {
         as_app "${VENV_DIR}/bin/pip" install -q -r "$tmp" || log "WARNING: pip install failed."
         rm -f "$tmp"
         as_app "${VENV_DIR}/bin/pip" install -q --no-deps mfrc522 || log "WARNING: mfrc522 install failed."
-        as_app "${VENV_DIR}/bin/pip" install -q rpi-lgpio spidev || log "WARNING: rpi-lgpio/spidev install failed."
         # pip's "mfrc522 requires RPi.GPIO" notice is expected here.
-        log "(pip's 'mfrc522 requires RPi.GPIO' notice is expected; rpi-lgpio provides it.)"
+        log "(pip's 'mfrc522 requires RPi.GPIO' notice is expected; apt's rpi-lgpio provides it.)"
     else
         as_app "${VENV_DIR}/bin/pip" install -q -r "$req" || log "WARNING: pip install failed."
-        as_app "${VENV_DIR}/bin/pip" install -q rpi-lgpio spidev 2>/dev/null || true
     fi
 }
 
 ensure_gpio() {
     # Swap out the real RPi.GPIO if something reinstalled it. Both must be
     # uninstalled first: they share RPi/, so removing one orphans the other.
-    compgen -G "${VENV_DIR}/lib/python*/site-packages/RPi/_GPIO*.so" >/dev/null || return 0
-    log "Real RPi.GPIO found; replacing it with rpi-lgpio."
-    as_app "${VENV_DIR}/bin/pip" uninstall -y -q RPi.GPIO rpi-gpio rpi-lgpio 2>/dev/null || true
-    as_app "${VENV_DIR}/bin/pip" install -q rpi-lgpio 2>/dev/null \
-        || log "WARNING: could not reinstall rpi-lgpio."
+    "${VENV_DIR}/bin/python" -c 'import RPi,pathlib,sys; sys.exit(0 if list(pathlib.Path(RPi.__file__).parent.glob("_GPIO*.so")) else 1)' 2>/dev/null || return 0
+    log "Real RPi.GPIO is shadowing rpi-lgpio; removing it from the venv."
+    as_app "${VENV_DIR}/bin/pip" uninstall -y -q RPi.GPIO rpi-gpio 2>/dev/null || true
 }
 
 prune_hardware() {

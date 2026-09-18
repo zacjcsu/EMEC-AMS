@@ -296,11 +296,13 @@ fi
 
 step "Installing system packages"
 
+
 export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update -qq
 sudo apt-get install -y -qq \
     git curl unzip rsync ca-certificates \
     python3 python3-venv python3-dev python3-pip \
+    python3-rpi-lgpio python3-spidev \
     build-essential i2c-tools >/dev/null
 ok "Base packages installed"
 
@@ -438,8 +440,15 @@ fi
 
 step "Setting up the virtual environment"
 
+# --system-site-packages so the venv can see apt's rpi-lgpio and spidev, which
+# have no wheel for python 3.13 and would otherwise compile from source.
+if [[ -x "${VENV_DIR}/bin/python" ]] \
+   && ! grep -q 'include-system-site-packages = true' "${VENV_DIR}/pyvenv.cfg" 2>/dev/null; then
+    warn "Existing venv cannot see system packages; recreating it."
+    rm -rf "$VENV_DIR"
+fi
 if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
-    python3 -m venv "$VENV_DIR"
+    python3 -m venv --system-site-packages "$VENV_DIR"
     ok "Created ${VENV_DIR}"
 else
     ok "Reusing existing venv"
@@ -460,9 +469,7 @@ elif grep -qiE '^[[:space:]]*mfrc522([[:space:]]|;|$|[<>=!])' "$REQ"; then
     rm -f "$REQ_TMP"
     "${VENV_DIR}/bin/pip" install -q --no-deps mfrc522 \
         || die "pip install of mfrc522 failed."
-    "${VENV_DIR}/bin/pip" install -q rpi-lgpio spidev \
-        || die "Could not install rpi-lgpio/spidev, which mfrc522 needs."
-    ok "Requirements installed (mfrc522 --no-deps, GPIO via rpi-lgpio)"
+    ok "Requirements installed (mfrc522 --no-deps, GPIO via apt rpi-lgpio)"
     info "pip's 'mfrc522 requires RPi.GPIO' ERROR above is expected and harmless:"
     info "rpi-lgpio provides that module under a different distribution name,"
     info "which pip has no way to know. Nothing is actually missing."
@@ -470,16 +477,14 @@ else
     # mfrc522 absent: plain install.
     "${VENV_DIR}/bin/pip" install -q -r "$REQ" \
         || die "pip install failed. Scroll up for the failing package."
-    "${VENV_DIR}/bin/pip" install -q rpi-lgpio spidev 2>/dev/null || true
     ok "Requirements installed"
 fi
 
 # Swap out the real RPi.GPIO if something reinstalled it. Both must be
 # uninstalled first: they share RPi/, so removing one orphans the other.
-if compgen -G "${VENV_DIR}/lib/python*/site-packages/RPi/_GPIO*.so" >/dev/null; then
-    warn "Real RPi.GPIO found; replacing it with rpi-lgpio."
-    "${VENV_DIR}/bin/pip" uninstall -y -q RPi.GPIO rpi-gpio rpi-lgpio 2>/dev/null || true
-    "${VENV_DIR}/bin/pip" install -q rpi-lgpio || warn "Could not reinstall rpi-lgpio."
+if "${VENV_DIR}/bin/python" -c 'import RPi,pathlib,sys; sys.exit(0 if list(pathlib.Path(RPi.__file__).parent.glob("_GPIO*.so")) else 1)' 2>/dev/null; then
+    warn "Real RPi.GPIO is shadowing rpi-lgpio; removing it from the venv."
+    "${VENV_DIR}/bin/pip" uninstall -y -q RPi.GPIO rpi-gpio 2>/dev/null || true
 fi
 
 chmod +x "${APP_DIR}/main.py" 2>/dev/null || true
@@ -493,7 +498,7 @@ step "Verifying the install"
 VERIFY_OUT="$(cd "$APP_DIR" && "${VENV_DIR}/bin/python" - <<'PYCHECK'
 import importlib
 
-# Import check. Deliberately does not import hardware_stubs.
+# Import check.
 FAKEABLE = ("RPi.GPIO", "smbus2", "mfrc522", "spidev")
 OTHER = ("dotenv", "dateutil", "pymysql")
 
@@ -529,10 +534,9 @@ MISSING_MODS="$(printf '%s\n' "$VERIFY_OUT" | sed -n 's/^MISSING://p')"
 HARDWARE_MODS="$(printf '%s\n' "$VERIFY_OUT" | sed -n 's/^HARDWARE://p')"
 
 if [[ -n "$FAKED_MODS" ]]; then
-    warn "MISSING HARDWARE MODULES. These do NOT crash the app."
-    warn "utils/hardware_stubs.py substitutes silent no-op fakes, so the machine"
-    warn "will look like it is working while the relay never fires:"
+    warn "MISSING HARDWARE MODULES. The service will not start:"
     printf '%s\n' "$FAKED_MODS" | tr '|' '\n' | sed 's/^/      /'
+    warn "Install with: sudo apt install python3-rpi-lgpio python3-spidev"
 elif [[ -z "$MISSING_MODS" ]]; then
     ok "All Python imports resolve, with real hardware modules (no stubs)"
 fi
@@ -540,8 +544,7 @@ fi
 info "GPIO implementation: ${GPIO_IMPL}"
 if (( IS_PI5 )) && [[ "$GPIO_IMPL" == "RPi.GPIO"* ]]; then
     warn "This is a Pi 5 running the real RPi.GPIO, which fails at runtime."
-    warn "rpi-lgpio did not take. Fix with, in this order:"
-    warn "  ${VENV_DIR}/bin/pip uninstall -y RPi.GPIO && ${VENV_DIR}/bin/pip install rpi-lgpio"
+    warn "Fix with: sudo apt install python3-rpi-lgpio"
 fi
 if [[ -n "$MISSING_MODS" ]]; then
     warn "Missing Python modules (these will stop the service):"

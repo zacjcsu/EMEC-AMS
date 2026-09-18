@@ -76,6 +76,9 @@ def _install_fake_mfrc522():
     mod = types.ModuleType("mfrc522")
 
     class FakeMFRC522:
+        def __init__(self, *args, **kwargs):
+            pass
+
         MI_OK = 0
         MI_NOTAGERR = 1
         MI_ERR = 2

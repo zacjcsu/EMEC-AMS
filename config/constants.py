@@ -39,6 +39,10 @@ MACHINE_ID = MACHINE_ID.casefold()
 
 # === Relay and Card Constants ===
 RELAY_PIN = 11
+LED_READER_PIN = 16       # GPIO23, D1
+LED_HEARTBEAT_PIN = 18    # GPIO24, D2
+HEARTBEAT_INTERVAL = 0.5  # toggle every 0.5s = 1 Hz blink
+READER_BLINK_DURATION = 0.1
 CARD_POLL_INTERVAL = 0.5  # seconds
 CARD_GRACE_PERIOD_DEFAULT = 10  # fallback if not in system_settings
 LCD_LINE_DELAY = 2  # seconds

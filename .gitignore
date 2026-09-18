@@ -17,6 +17,9 @@ data/
 logs/*
 !logs/.gitkeep
 
+# Update trigger written by main.py, watched by emec-ams-update.path
+.update-requested
+
 # Python
 __pycache__/
 *.py[cod]

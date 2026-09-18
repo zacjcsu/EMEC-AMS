@@ -21,7 +21,7 @@ set -euo pipefail
 
 APP_USER="${APP_USER:-emec}"
 APP_DIR="${APP_DIR:-/home/${APP_USER}/emec-ams}"
-VENV_DIR="${APP_DIR}/myvenv"
+VENV_DIR="${APP_DIR}/.venv"
 SERVICE_NAME="emec-ams"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
@@ -351,7 +351,7 @@ step "Installing code into ${APP_DIR}"
 # Preserve anything that is per-Pi state: the venv, logs, local database, and
 # the config files this script writes below.
 rsync -a --delete \
-    --exclude 'myvenv/' \
+    --exclude '.venv/' \
     --exclude 'logs/' \
     --exclude 'data/' \
     --exclude '.env' \
@@ -403,7 +403,7 @@ ok "config/config.json written"
 if [[ ! -f "${APP_DIR}/.gitignore" ]]; then
     cat >"${APP_DIR}/.gitignore" <<'EOF'
 .env
-myvenv/
+.venv/
 data/
 logs/
 __pycache__/

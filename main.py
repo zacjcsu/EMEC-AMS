@@ -73,6 +73,11 @@ def main():
             session_mgr.handle_grace_period(reader)
         except Exception:
             logger.exception("[MAIN] Unhandled error in main loop; recovering.")
+            relay.turn_off()
+            try:
+                session_mgr.force_end_session()
+            except Exception:
+                logger.exception("[MAIN] Could not cleanly close the session.")
             time.sleep(5)
 
 if __name__ == "__main__":

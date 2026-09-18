@@ -8,7 +8,8 @@
 # Fully unattended:
 #   curl -fsSL https://raw.githubusercontent.com/zacjcsu/EMEC-AMS/main/emecamssetup.sh \
 #     | MACHINE_ID=lathe-001 MACHINE_NAME="Manual Lathe 1" MACHINE_TYPE="Manual Lathe" \
-#       AZURE_PASSWORD='...' bash -s -- --yes
+#       AZURE_HOST='...' AZURE_USER='...' AZURE_DATABASE='...' AZURE_PASSWORD='...' \
+#       bash -s -- --yes
 #
 # Safe to re-run: re-running is also how you update a Pi to the latest commit.
 # Existing config, venv, logs and local DB are preserved.
@@ -31,8 +32,10 @@ SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 SOURCE_MODE="${SOURCE_MODE:-git}"
 
 # Google Drive file ID of emec-ams.zip. Only used when SOURCE_MODE=drive.
-# From a share link like https://drive.google.com/file/d/<THIS_PART>/view
-SOURCE_DRIVE_ID="${SOURCE_DRIVE_ID:-1xKYNR2btNIZu5AqLziXFbyG05NyFkOai}"
+# Left blank on purpose: that zip contains a .env, so publishing its id here
+# would publish a pointer to the credentials. Pass SOURCE_DRIVE_ID=<id> if you
+# ever need the Drive fallback.
+SOURCE_DRIVE_ID="${SOURCE_DRIVE_ID:-}"
 
 SOURCE_REPO="${SOURCE_REPO:-https://github.com/zacjcsu/EMEC-AMS.git}"
 SOURCE_BRANCH="${SOURCE_BRANCH:-main}"
@@ -43,12 +46,10 @@ KEYBOARD_LAYOUT="${KEYBOARD_LAYOUT:-us}"
 WIFI_COUNTRY="${WIFI_COUNTRY:-US}"
 
 # Azure MySQL connection, written to ${APP_DIR}/.env at mode 600.
-# No password is stored in this script. It is prompted for, or supplied as the
-# AZURE_PASSWORD environment variable for unattended runs. The values below are
-# only the defaults offered at the prompt.
-DEF_AZURE_HOST="ams-mysql-server.mysql.database.azure.com"
-DEF_AZURE_USER="pi"
-DEF_AZURE_DATABASE="emec_access"
+# This file is public, so it holds no host, user, database name or password.
+# All of those are prompted for at run time, or passed as environment variables
+# for unattended runs. Only the CA path, a standard OS location rather than a
+# credential, keeps a default.
 DEF_AZURE_SSL_CA="/etc/ssl/certs/ca-certificates.crt"
 
 AZURE_HOST="${AZURE_HOST:-}"
@@ -111,6 +112,25 @@ ask() {
     printf -v "$__var" '%s' "${__reply:-$__default}"
 }
 
+ask_required() {
+    # ask_required <variable-name> <prompt>   (no default, must not be empty)
+    local __var="$1" __prompt="$2" __reply="" __try=0
+    if (( ASSUME_YES )); then
+        die "${__prompt} is required. With --yes, pass it as an environment variable: ${__var}=..."
+    fi
+    (( CAN_PROMPT )) || no_prompt_die "$__prompt"
+    while (( __try < 3 )); do
+        read -r -p "    ${__prompt}: " __reply <"$TTY" || true
+        if [[ -n "$__reply" ]]; then
+            printf -v "$__var" '%s' "$__reply"
+            return
+        fi
+        warn "Cannot be empty."
+        __try=$(( __try + 1 ))
+    done
+    die "Too many failed attempts."
+}
+
 ask_secret() {
     # ask_secret <variable-name> <prompt>   (no echo, asks twice to catch typos)
     local __var="$1" __prompt="$2" __a="" __b="" __try=0
@@ -159,6 +179,10 @@ if [[ -r /proc/device-tree/model ]]; then
     PI_MODEL="$(tr -d '\0' </proc/device-tree/model)"
 fi
 info "Device: ${PI_MODEL}"
+
+IS_PI5=0
+[[ "$PI_MODEL" == *"Raspberry Pi 5"* ]] && IS_PI5=1
+(( IS_PI5 )) && info "Pi 5 detected: will substitute rpi-lgpio for RPi.GPIO."
 
 step "Requesting sudo access up front"
 if ! sudo -n true 2>/dev/null; then
@@ -216,10 +240,10 @@ if [[ -f "$ENV_FILE" ]] && [[ -z "$AZURE_PASSWORD" ]]; then
     ok "Existing .env found; keeping it."
     info "To replace it, re-run with AZURE_PASSWORD=... or delete ${ENV_FILE} first."
 else
-    [[ -z "$AZURE_HOST"     ]] && ask AZURE_HOST     "Azure MySQL host"     "$DEF_AZURE_HOST"
-    [[ -z "$AZURE_USER"     ]] && ask AZURE_USER     "Azure MySQL user"     "$DEF_AZURE_USER"
-    [[ -z "$AZURE_DATABASE" ]] && ask AZURE_DATABASE "Azure database"       "$DEF_AZURE_DATABASE"
-    [[ -z "$AZURE_SSL_CA"   ]] && ask AZURE_SSL_CA   "SSL CA bundle path"   "$DEF_AZURE_SSL_CA"
+    [[ -z "$AZURE_HOST"     ]] && ask_required AZURE_HOST     "Azure MySQL host"
+    [[ -z "$AZURE_USER"     ]] && ask_required AZURE_USER     "Azure MySQL user"
+    [[ -z "$AZURE_DATABASE" ]] && ask_required AZURE_DATABASE "Azure database"
+    [[ -z "$AZURE_SSL_CA"   ]] && ask AZURE_SSL_CA "SSL CA bundle path" "$DEF_AZURE_SSL_CA"
     [[ -z "$AZURE_PASSWORD" ]] && ask_secret AZURE_PASSWORD "Azure MySQL password"
     ok "Credentials collected for ${AZURE_USER}@${AZURE_HOST}"
 fi
@@ -358,6 +382,7 @@ rsync -a --delete \
     --exclude '.gitignore' \
     --exclude 'config/config.json' \
     --exclude '.git/' \
+    --exclude 'hardware/' \
     --exclude '__pycache__/' \
     --exclude '*.pyc' \
     "${SRC_ROOT}/" "${APP_DIR}/" \
@@ -365,7 +390,7 @@ rsync -a --delete \
 ok "Code in place"
 
 mkdir -p "${APP_DIR}/logs" "${APP_DIR}/data" "${APP_DIR}/config"
-touch "${APP_DIR}/logs/sync.log"
+touch "${APP_DIR}/logs/errors.log" "${APP_DIR}/logs/sync.log"
 
 # ---------------------------------------------------------------------------
 # 6. Config files
@@ -427,22 +452,47 @@ fi
 
 "${VENV_DIR}/bin/python" -m pip install --upgrade pip setuptools wheel -q
 
-if [[ -f "${APP_DIR}/requirements.txt" ]]; then
-    "${VENV_DIR}/bin/pip" install -q -r "${APP_DIR}/requirements.txt" \
-        || die "pip install failed. Scroll up for the failing package."
-    ok "Requirements installed"
-else
+# mfrc522 declares "Requires-Dist: RPi.GPIO", but rpi-lgpio is what we actually
+# want providing that module. pip resolves by distribution name, not module
+# name, so installing rpi-lgpio first does not satisfy it: pip fetches the real
+# RPi.GPIO anyway and it lands on top. RPi.GPIO also ships no wheel for
+# python 3.11 or aarch64, so on Bookworm it COMPILES from source, and we would
+# then delete it. Install mfrc522 with --no-deps and supply its real needs
+# ourselves, so the real RPi.GPIO is never fetched at all.
+REQ="${APP_DIR}/requirements.txt"
+if [[ ! -f "$REQ" ]]; then
     warn "No requirements.txt found; skipping."
+elif grep -qiE '^[[:space:]]*mfrc522([[:space:]]|;|$|[<>=!])' "$REQ"; then
+    REQ_TMP="$(mktemp)"
+    grep -viE '^[[:space:]]*mfrc522([[:space:]]|;|$|[<>=!])' "$REQ" >"$REQ_TMP" || true
+    "${VENV_DIR}/bin/pip" install -q -r "$REQ_TMP" \
+        || die "pip install failed. Scroll up for the failing package."
+    rm -f "$REQ_TMP"
+    "${VENV_DIR}/bin/pip" install -q --no-deps mfrc522 \
+        || die "pip install of mfrc522 failed."
+    "${VENV_DIR}/bin/pip" install -q rpi-lgpio spidev \
+        || die "Could not install rpi-lgpio/spidev, which mfrc522 needs."
+    ok "Requirements installed (mfrc522 --no-deps, GPIO via rpi-lgpio)"
+    info "pip's 'mfrc522 requires RPi.GPIO' ERROR above is expected and harmless:"
+    info "rpi-lgpio provides that module under a different distribution name,"
+    info "which pip has no way to know. Nothing is actually missing."
+else
+    # mfrc522 is gone or its metadata was fixed: plain install.
+    "${VENV_DIR}/bin/pip" install -q -r "$REQ" \
+        || die "pip install failed. Scroll up for the failing package."
+    "${VENV_DIR}/bin/pip" install -q rpi-lgpio spidev 2>/dev/null || true
+    ok "Requirements installed"
 fi
 
-"${VENV_DIR}/bin/pip" uninstall -y -q RPi.GPIO rpi-gpio 2>/dev/null || true
-"${VENV_DIR}/bin/pip" install -q rpi-lgpio \
-    && ok "Installed rpi-lgpio (replaces RPi.GPIO)" \
-    || warn "Could not install rpi-lgpio; GPIO will fail."
-
-# spidev is required by mfrc522 and is easy to miss.
-"${VENV_DIR}/bin/python" -c 'import spidev' 2>/dev/null \
-    || "${VENV_DIR}/bin/pip" install -q spidev || true
+# Safety net: if the real RPi.GPIO is present anyway (someone ran
+# `pip install --upgrade mfrc522` by hand), swap it back out. Uninstalling it
+# deletes the shared RPi/ directory including rpi-lgpio's files while pip still
+# records rpi-lgpio as installed, so both must go before reinstalling.
+if compgen -G "${VENV_DIR}/lib/python*/site-packages/RPi/_GPIO*.so" >/dev/null; then
+    warn "Real RPi.GPIO found; replacing it with rpi-lgpio."
+    "${VENV_DIR}/bin/pip" uninstall -y -q RPi.GPIO rpi-gpio rpi-lgpio 2>/dev/null || true
+    "${VENV_DIR}/bin/pip" install -q rpi-lgpio || warn "Could not reinstall rpi-lgpio."
+fi
 
 chmod +x "${APP_DIR}/main.py" 2>/dev/null || true
 
@@ -469,33 +519,64 @@ fi
 step "Verifying the install"
 
 VERIFY_OUT="$(cd "$APP_DIR" && "${VENV_DIR}/bin/python" - <<'PYCHECK'
-import importlib, sys
-missing = []
-hardware = []
-for mod in ("dotenv", "dateutil", "pymysql", "mfrc522", "RPi.GPIO", "spidev",
-            "config.constants", "db.local_db", "rfid.reader", "lcd.RGB1602"):
-    try:
-        importlib.import_module(mod)
-    except ModuleNotFoundError as e:
-        missing.append(f"{mod}: {e}")
-    except (OSError, RuntimeError) as e:
-        # bus/GPIO not available yet (pre-reboot, or not on a Pi). Not a packaging problem.
-        hardware.append(f"{mod}: {e}")
-    except Exception as e:
-        hardware.append(f"{mod}: {type(e).__name__}: {e}")
+import importlib
+
+# utils/hardware_stubs.py replaces any of these with a silent no-op fake when
+# the real module is missing, so the app starts and appears healthy while the
+# relay never fires and the LCD never lights. That makes a missing one far more
+# dangerous than a crash. Check them WITHOUT importing hardware_stubs.
+FAKEABLE = ("RPi.GPIO", "smbus2", "mfrc522", "spidev")
+OTHER = ("dotenv", "dateutil", "pymysql")
+
+faked, missing, hardware = [], [], []
+for group, dest in ((FAKEABLE, faked), (OTHER, missing)):
+    for mod in group:
+        try:
+            importlib.import_module(mod)
+        except ImportError as e:
+            dest.append(f"{mod}: {e}")
+        except Exception as e:
+            # Present but the hardware is not responding yet. Not a packaging problem.
+            hardware.append(f"{mod}: {type(e).__name__}: {e}")
+
+impl = "none"
+try:
+    import RPi, pathlib
+    d = pathlib.Path(RPi.__file__).parent
+    impl = "RPi.GPIO (real C extension)" if list(d.glob("_GPIO*.so")) else "rpi-lgpio"
+except Exception:
+    pass
+
+print("FAKED:" + "|".join(faked))
 print("MISSING:" + "|".join(missing))
 print("HARDWARE:" + "|".join(hardware))
+print("IMPL:" + impl)
 PYCHECK
 )" || true
 
+GPIO_IMPL="$(printf '%s\n' "$VERIFY_OUT" | sed -n 's/^IMPL://p')"
+FAKED_MODS="$(printf '%s\n' "$VERIFY_OUT" | sed -n 's/^FAKED://p')"
 MISSING_MODS="$(printf '%s\n' "$VERIFY_OUT" | sed -n 's/^MISSING://p')"
 HARDWARE_MODS="$(printf '%s\n' "$VERIFY_OUT" | sed -n 's/^HARDWARE://p')"
 
+if [[ -n "$FAKED_MODS" ]]; then
+    warn "MISSING HARDWARE MODULES. These do NOT crash the app."
+    warn "utils/hardware_stubs.py substitutes silent no-op fakes, so the machine"
+    warn "will look like it is working while the relay never fires:"
+    printf '%s\n' "$FAKED_MODS" | tr '|' '\n' | sed 's/^/      /'
+elif [[ -z "$MISSING_MODS" ]]; then
+    ok "All Python imports resolve, with real hardware modules (no stubs)"
+fi
+
+info "GPIO implementation: ${GPIO_IMPL}"
+if (( IS_PI5 )) && [[ "$GPIO_IMPL" == "RPi.GPIO"* ]]; then
+    warn "This is a Pi 5 running the real RPi.GPIO, which fails at runtime."
+    warn "rpi-lgpio did not take. Fix with, in this order:"
+    warn "  ${VENV_DIR}/bin/pip uninstall -y RPi.GPIO && ${VENV_DIR}/bin/pip install rpi-lgpio"
+fi
 if [[ -n "$MISSING_MODS" ]]; then
     warn "Missing Python modules (these will stop the service):"
     printf '%s\n' "$MISSING_MODS" | tr '|' '\n' | sed 's/^/      /'
-else
-    ok "All Python imports resolve"
 fi
 if [[ -n "$HARDWARE_MODS" ]]; then
     info "Hardware not responding yet (normal before the SPI/I2C reboot):"
@@ -534,33 +615,56 @@ sudo chown -R "${APP_USER}:${APP_USER}" "$APP_DIR"
 
 sudo systemctl daemon-reload
 sudo systemctl enable "${SERVICE_NAME}.service" >/dev/null 2>&1
-sudo systemctl restart "${SERVICE_NAME}.service"
-ok "Service enabled and started"
+ok "Service enabled"
 
-sleep 3
-step "Service status"
-sudo systemctl status "${SERVICE_NAME}.service" --no-pager --lines=15 || true
+if (( REBOOT_NEEDED )); then
+    # Starting now would fail: lcd/RGB1602.py opens /dev/i2c-1 at import time,
+    # and SPI/I2C do not exist until the reboot. Leave it enabled instead of
+    # showing a failure that is not a real problem.
+    warn "Not starting the service yet: SPI/I2C need a reboot first."
+    info "It is enabled and will start automatically on boot."
+else
+    sudo systemctl restart "${SERVICE_NAME}.service"
+    sleep 4
+    step "Service status"
+    sudo systemctl status "${SERVICE_NAME}.service" --no-pager --lines=15 || true
+    if ! systemctl is-active --quiet "${SERVICE_NAME}.service"; then
+        warn "Service is not running. Last 20 journal lines:"
+        journalctl -u "${SERVICE_NAME}.service" -n 20 --no-pager 2>/dev/null | sed 's/^/      /' || true
+        printf '\n    Reproduce in the foreground with:\n'
+        printf '      cd %s && ./.venv/bin/python main.py\n' "$APP_DIR"
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 
+if (( REBOOT_NEEDED )); then
+    HEADLINE="${C_YELLOW}${C_BOLD}Install complete. Reboot required.${C_RESET}"
+elif systemctl is-active --quiet "${SERVICE_NAME}.service"; then
+    HEADLINE="${C_GREEN}${C_BOLD}Setup complete. Service is running.${C_RESET}"
+else
+    HEADLINE="${C_YELLOW}${C_BOLD}Install complete, but the service is not running.${C_RESET}"
+fi
+
 cat <<EOF
 
-${C_GREEN}${C_BOLD}Setup complete.${C_RESET}
+${HEADLINE}
 
   Machine     ${MACHINE_ID} (${MACHINE_NAME})
   Install dir ${APP_DIR}
   Service     ${SERVICE_NAME}.service
 
-  Live logs      journalctl -u ${SERVICE_NAME}.service -f
-  App logs       tail -f ${APP_DIR}/logs/sync.log
+  Service log    journalctl -u ${SERVICE_NAME}.service -f   <- tracebacks go here
+  App log        tail -f ${APP_DIR}/logs/sync.log
+  Run by hand    cd ${APP_DIR} && ./.venv/bin/python main.py
   Restart        sudo systemctl restart ${SERVICE_NAME}.service
-  I2C check      i2cdetect -y 1
+  I2C check      i2cdetect -y 1      (expect 3e and 60)
   SPI check      ls -l /dev/spidev*
 EOF
 
 if (( REBOOT_NEEDED )); then
-    printf '\n%s[action needed]%s SPI/I2C were just enabled. Reboot before the reader and LCD will work:\n    sudo reboot\n' \
-        "$C_YELLOW" "$C_RESET"
+    printf '\n%s[action needed]%s SPI and I2C were just enabled and do not exist yet.\n' "$C_YELLOW" "$C_RESET"
+    printf '    The service cannot start until you reboot. It will come up on its own after:\n\n      sudo reboot\n\n'
 fi

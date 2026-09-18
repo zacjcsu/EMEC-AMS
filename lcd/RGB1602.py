@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import time
-from smbus import SMBus
+from smbus2 import SMBus
 b = SMBus(1)
 
 #Device I2C Arress

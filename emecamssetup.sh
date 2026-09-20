@@ -4,7 +4,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/zacjcsu/EMEC-AMS/main/emecamssetup.sh | bash
 #
-# Unattended: pass MACHINE_ID, MACHINE_NAME, MACHINE_TYPE, AZURE_* and --yes.
+# Unattended: pass MACHINE_ID, MACHINE_NAME, MACHINE_TYPE, DB_* and --yes.
 
 set -euo pipefail
 
@@ -34,13 +34,14 @@ WIFI_COUNTRY="${WIFI_COUNTRY:-US}"
 
 # Written to ${APP_DIR}/.env at mode 600. Prompted for, or passed as env vars.
 # This file is public, so only the CA path keeps a default.
-DEF_AZURE_SSL_CA="/etc/ssl/certs/ca-certificates.crt"
+DEF_DB_PORT="5432"
+DEF_DB_NAME="emec_access"
 
-AZURE_HOST="${AZURE_HOST:-}"
-AZURE_USER="${AZURE_USER:-}"
-AZURE_PASSWORD="${AZURE_PASSWORD:-}"
-AZURE_DATABASE="${AZURE_DATABASE:-}"
-AZURE_SSL_CA="${AZURE_SSL_CA:-}"
+DB_HOST="${DB_HOST:-}"
+DB_PORT="${DB_PORT:-}"
+DB_USER="${DB_USER:-}"
+DB_PASS="${DB_PASS:-}"
+DB_NAME="${DB_NAME:-}"
 
 ASSUME_YES=0
 [[ "${1:-}" == "--yes" || "${1:-}" == "-y" ]] && ASSUME_YES=1
@@ -79,7 +80,7 @@ no_prompt_die() {
       Run from an interactive shell, or re-run non-interactively with --yes and
       supply the values as environment variables, e.g.
         MACHINE_ID=lathe-001 MACHINE_NAME='Manual Lathe 1' \\
-        MACHINE_TYPE='Manual Lathe' AZURE_PASSWORD='...' bash -s -- --yes"
+        MACHINE_TYPE='Manual Lathe' DB_PASS='...' bash -s -- --yes"
 }
 
 ask() {
@@ -213,22 +214,22 @@ ok "${MACHINE_ID} / ${MACHINE_NAME} / ${MACHINE_TYPE}"
 # 1b. Azure credentials
 # ---------------------------------------------------------------------------
 
-step "Azure database credentials (written to .env)"
+step "Database credentials (written to .env)"
 
 ENV_FILE="${APP_DIR}/.env"
 KEEP_ENV=0
 
-if [[ -f "$ENV_FILE" ]] && [[ -z "$AZURE_PASSWORD" ]]; then
+if [[ -f "$ENV_FILE" ]] && [[ -z "$DB_PASS" ]]; then
     KEEP_ENV=1
     ok "Existing .env found; keeping it."
-    info "To replace it, re-run with AZURE_PASSWORD=... or delete ${ENV_FILE} first."
+    info "To replace it, re-run with DB_PASS=... or delete ${ENV_FILE} first."
 else
-    [[ -z "$AZURE_HOST"     ]] && ask_required AZURE_HOST     "Azure MySQL host"
-    [[ -z "$AZURE_USER"     ]] && ask_required AZURE_USER     "Azure MySQL user"
-    [[ -z "$AZURE_DATABASE" ]] && ask_required AZURE_DATABASE "Azure database"
-    [[ -z "$AZURE_SSL_CA"   ]] && ask AZURE_SSL_CA "SSL CA bundle path" "$DEF_AZURE_SSL_CA"
-    [[ -z "$AZURE_PASSWORD" ]] && ask_secret AZURE_PASSWORD "Azure MySQL password"
-    ok "Credentials collected for ${AZURE_USER}@${AZURE_HOST}"
+    [[ -z "$DB_HOST" ]] && ask_required DB_HOST "PostgreSQL host (dashboard VM address)"
+    [[ -z "$DB_PORT" ]] && ask DB_PORT "PostgreSQL port" "$DEF_DB_PORT"
+    [[ -z "$DB_USER" ]] && ask_required DB_USER "PostgreSQL user"
+    [[ -z "$DB_NAME" ]] && ask DB_NAME "Database name" "$DEF_DB_NAME"
+    [[ -z "$DB_PASS" ]] && ask_secret DB_PASS "PostgreSQL password"
+    ok "Credentials collected for ${DB_USER}@${DB_HOST}"
 fi
 
 # ---------------------------------------------------------------------------
@@ -404,11 +405,11 @@ if (( KEEP_ENV )); then
 else
     umask 077
     cat >"$ENV_FILE" <<EOF
-AZURE_HOST=${AZURE_HOST}
-AZURE_USER=${AZURE_USER}
-AZURE_PASSWORD=${AZURE_PASSWORD}
-AZURE_DATABASE=${AZURE_DATABASE}
-AZURE_SSL_CA=${AZURE_SSL_CA}
+DB_HOST=${DB_HOST}
+DB_PORT=${DB_PORT}
+DB_USER=${DB_USER}
+DB_PASS=${DB_PASS}
+DB_NAME=${DB_NAME}
 EOF
     umask 022
     chmod 600 "$ENV_FILE"
@@ -503,7 +504,7 @@ import importlib
 
 # Import check.
 FAKEABLE = ("RPi.GPIO", "smbus2", "mfrc522", "spidev")
-OTHER = ("dotenv", "dateutil", "pymysql")
+OTHER = ("dotenv", "dateutil", "psycopg")
 
 faked, missing, hardware = [], [], []
 for group, dest in ((FAKEABLE, faked), (OTHER, missing)):

@@ -214,7 +214,7 @@ sync_code() {
 HW_CHECK_PY='
 import importlib
 bad = []
-for mod in ("RPi.GPIO", "smbus2", "mfrc522", "spidev", "dotenv", "pymysql"):
+for mod in ("RPi.GPIO", "smbus2", "mfrc522", "spidev", "dotenv", "psycopg"):
     try:
         importlib.import_module(mod)
     except ImportError as e:

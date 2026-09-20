@@ -96,8 +96,10 @@ def main():
                 time.sleep(CARD_POLL_INTERVAL)
 
             session_mgr.start_session(validated_csu_id, display_name)
-            session_mgr.wait_for_card_removal(reader)
-            session_mgr.handle_grace_period(reader)
+            # The grace period only applies when the card was removed. If the server or a new card already
+            # ended the session (lost card, revoke, expiry, emergency stop), there is nothing to resume.
+            if session_mgr.wait_for_card_removal(reader) == "removed":
+                session_mgr.handle_grace_period(reader)
         except Exception:
             logger.exception("[MAIN] Unhandled error in main loop; recovering.")
             relay.turn_off()

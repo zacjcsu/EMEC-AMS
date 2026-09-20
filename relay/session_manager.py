@@ -77,12 +77,17 @@ class SessionManager:
         self.force_end_session()
 
     def wait_for_card_removal(self, reader):
+        """Watch the card while the session runs. Returns why the wait ended:
+        'removed'  the card left the reader: the caller starts the grace period;
+        'new_card' a different card was presented: the session is already ended;
+        otherwise  the reason the server ended it (a lockout: estop, lost/expired card, access lost),
+                   also already ended. Only 'removed' has a session left to give a grace period to."""
         absence_start = None
         while True:
             reason = self._lockout_reason()
             if reason:
                 self._end_for_lockout(reason)
-                break
+                return reason
             scan = reader.read_card()
             if scan:
                 uid, csu_id = scan
@@ -92,13 +97,13 @@ class SessionManager:
                     logger.info("[SESSION] New card detected mid-session.")
                     self._show("New card mid-sesh", "Resetting...", color="red", delay=LCD_LINE_DELAY)
                     self.force_end_session()
-                    break
+                    return "new_card"
             else:
                 if absence_start is None:
                     absence_start = time.time()
                 elif time.time() - absence_start >= 3:
                     self._show("Card removed", "Waiting for reinsert", color="yellow")
-                    break
+                    return "removed"
             time.sleep(0.5)
 
     def handle_grace_period(self, reader):

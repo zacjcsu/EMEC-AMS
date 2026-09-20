@@ -1,9 +1,10 @@
 import sqlite3
 import os
 import logging
-from datetime import datetime
 from config.constants import LOCAL_DB_PATH
 from create_local_db import create_local_db
+from utils.timeutil import utc_now_str
+from db import access_rule
 from config.constants import (
     STATUS_NEUTRAL, STATUS_IN_USE, STATUS_OFFLINE, STATUS_MAINTENANCE
 )
@@ -13,8 +14,7 @@ logger = logging.getLogger("local_db")
 
 class LocalDB:
     def __init__(self):
-        if not os.path.exists(LOCAL_DB_PATH):
-            create_local_db()
+        create_local_db()
 
         self.conn = sqlite3.connect(LOCAL_DB_PATH)
         self.conn.row_factory = sqlite3.Row
@@ -49,7 +49,7 @@ class LocalDB:
         self.conn.commit()
 
     def update_machine_heartbeat(self, machine_id):
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = utc_now_str()
         self.cursor.execute("UPDATE Machine SET last_heartbeat = ? WHERE machine_id = ?", (now, machine_id))
         self.conn.commit()
 
@@ -58,23 +58,51 @@ class LocalDB:
         row = self.cursor.fetchone()
         return row["value"] if row else default
 
-    def get_open_close_times(self):
-        self.cursor.execute(
-            "SELECT setting, value FROM System_Settings WHERE setting IN ('lab_open_time', 'lab_close_time')"
-        )
-        settings = {row['setting']: row['value'] for row in self.cursor.fetchall()}
-        return settings.get('lab_open_time'), settings.get('lab_close_time')
-
     def get_user(self, csu_id):
         self.cursor.execute("SELECT * FROM Users WHERE csu_id = ?", (csu_id,))
         return self.cursor.fetchone()
 
-    def has_permission(self, csu_id, machine_id):
-        self.cursor.execute(
-            "SELECT 1 FROM Machine_Permissions WHERE csu_id = ? AND machine_id = ?",
-            (csu_id, machine_id)
-        )
-        return self.cursor.fetchone() is not None
+    def access_decision(self, csu_id, machine_id, at=None):
+        """(allowed, reason, via) for this user on this machine's category, from the local cache.
+        Mirrors the server's access_decision_machine(); see db/access_rule.py."""
+        machine = self.get_machine(machine_id)
+        if not machine or not machine["machine_type"]:
+            return False, "unknown_machine", None
+        machine_type = machine["machine_type"]
+        c = self.cursor
+
+        c.execute("SELECT 1 FROM Users WHERE csu_id = ?", (csu_id,))
+        user_exists = c.fetchone() is not None
+        c.execute(
+            "SELECT 1 FROM User_Groups ug JOIN Groups g ON g.group_name = ug.group_name "
+            "WHERE ug.csu_id = ? AND g.enabled = 0", (csu_id,))
+        in_disabled_group = c.fetchone() is not None
+        c.execute(
+            "SELECT 1 FROM Category_Permissions WHERE csu_id = ? AND machine_type = ?",
+            (csu_id, machine_type))
+        has_permission = c.fetchone() is not None
+
+        tz = self.get_setting("lab_timezone", access_rule.DEFAULT_TZ)
+        local = access_rule.local_now(tz, at)
+        lab_open = access_rule.parse_time(self.get_setting("lab_open_time"))
+        lab_close = access_rule.parse_time(self.get_setting("lab_close_time"))
+        lab_days = access_rule.parse_days(self.get_setting("lab_days", ""))
+
+        c.execute(
+            "SELECT w.level_name, w.days, w.start_time, w.end_time FROM User_Access ua "
+            "JOIN Access_Levels l ON l.level_name = ua.level_name "
+            "JOIN Level_Windows w ON w.level_name = ua.level_name "
+            "WHERE ua.csu_id = ? AND l.enabled = 1", (csu_id,))
+        windows = []
+        for name, days, start, end in c.fetchall():
+            start_t, end_t = access_rule.parse_time(start), access_rule.parse_time(end)
+            if start_t is not None and end_t is not None:
+                windows.append((name, access_rule.parse_days(days), start_t, end_t))
+
+        return access_rule.decide(
+            user_exists=user_exists, in_disabled_group=in_disabled_group,
+            has_permission=has_permission, lab_open=lab_open, lab_close=lab_close,
+            lab_days=lab_days, level_windows=windows, local=local)
 
     def access_request_exists(self, csu_id, machine_id):
         self.cursor.execute(
@@ -84,7 +112,7 @@ class LocalDB:
         return self.cursor.fetchone() is not None
 
     def insert_access_request(self, csu_id, machine_id, uid_fallback):
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = utc_now_str()
         self.cursor.execute("SELECT uid FROM Users WHERE csu_id = ?", (csu_id,))
         user = self.cursor.fetchone()
         uid = user["uid"] if user else uid_fallback
@@ -102,21 +130,21 @@ class LocalDB:
         self.conn.commit()
 
     def mark_user_active(self, csu_id):
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = utc_now_str()
         self.cursor.execute(
             "UPDATE Users SET is_active = 1, last_used = ? WHERE csu_id = ?", (now, csu_id,)
         )
         self.conn.commit()
 
     def mark_user_inactive(self, csu_id):
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = utc_now_str()
         self.cursor.execute(
             "UPDATE Users SET is_active = 0, last_used = ? WHERE csu_id = ?", (now, csu_id,)
         )
         self.conn.commit()
 
     def insert_session(self, session_id, csu_id, machine_id):
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = utc_now_str()
         self.cursor.execute("SELECT machine_type FROM Machine WHERE machine_id = ?", (machine_id,))
         result = self.cursor.fetchone()
         machine_type = result["machine_type"] if result and result["machine_type"] else "Unknown"
@@ -129,7 +157,7 @@ class LocalDB:
         self.conn.commit()
 
     def end_session(self, session_id):
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = utc_now_str()
         self.cursor.execute("""
             UPDATE Machine_Usage
             SET end_time = ?,
@@ -146,13 +174,6 @@ class LocalDB:
             self.conn.commit()
             return True
         return False
-
-    def user_has_level(self, csu_id, level_name):
-        self.cursor.execute(
-            "SELECT 1 FROM User_Access WHERE csu_id = ? AND level_name = ?",
-            (csu_id, level_name)
-        )
-        return self.cursor.fetchone() is not None
 
     def close(self):
         self.conn.close()

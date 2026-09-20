@@ -25,9 +25,25 @@ CREATE TABLE IF NOT EXISTS User_Access (
     PRIMARY KEY (csu_id, level_name)
 );
 
--- ACCESS LEVELS
+-- ACCESS LEVELS (grant access during their windows)
 CREATE TABLE IF NOT EXISTS Access_Levels (
-    level_name TEXT PRIMARY KEY
+    level_name TEXT PRIMARY KEY,
+    enabled INTEGER DEFAULT 1
+);
+
+-- LEVEL WINDOWS (days = comma-separated ISO weekdays of the start day, 1=Mon..7=Sun; times HH:MM:SS)
+CREATE TABLE IF NOT EXISTS Level_Windows (
+    window_id INTEGER PRIMARY KEY,
+    level_name TEXT,
+    days TEXT,
+    start_time TEXT,
+    end_time TEXT
+);
+
+-- GROUPS (a disabled group blocks every member)
+CREATE TABLE IF NOT EXISTS Groups (
+    group_name TEXT PRIMARY KEY,
+    enabled INTEGER DEFAULT 1
 );
 
 -- USER GROUPS
@@ -49,16 +65,11 @@ CREATE TABLE IF NOT EXISTS Machine (
     device_id TEXT
 );
 
--- MACHINE PERMISSIONS
-CREATE TABLE IF NOT EXISTS Machine_Permissions (
+-- CATEGORY PERMISSIONS (permissions are per machine category = Machine.machine_type)
+CREATE TABLE IF NOT EXISTS Category_Permissions (
     csu_id TEXT,
-    machine_id TEXT,
     machine_type TEXT,
-    permission_status TEXT,
-    permission_mode TEXT,
-    modified_by TEXT,
-    modified_at TEXT,
-    PRIMARY KEY (csu_id, machine_id)
+    PRIMARY KEY (csu_id, machine_type)
 );
 
 -- ACCESS REQUESTS
@@ -96,9 +107,16 @@ CREATE TABLE IF NOT EXISTS System_Settings (
 """
 
 def create_local_db():
+    """Create missing tables and bring an older cache up to date. Safe to run every start: the
+    synced tables are a cache, and Machine_Usage / Access_Requests are never dropped."""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.executescript(schema)
+    cols = [r[1] for r in cur.execute("PRAGMA table_info(Access_Levels)")]
+    if "enabled" not in cols:
+        cur.execute("ALTER TABLE Access_Levels ADD COLUMN enabled INTEGER DEFAULT 1")
+    # Replaced by Category_Permissions when permissions moved from machines to categories.
+    cur.execute("DROP TABLE IF EXISTS Machine_Permissions")
     conn.commit()
     conn.close()
-    logger.info(f"Local DB created at {DB_PATH}")
+    logger.info(f"Local DB ready at {DB_PATH}")

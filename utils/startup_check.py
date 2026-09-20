@@ -46,10 +46,10 @@ def startup_sequence(lcd, db):
     try:
         lcd.display("Syncing online")
         sync_local_from_azure()
-        logger.info("[PASS] Azure sync complete.")
+        logger.info("[PASS] Server sync complete.")
     except Exception as e:
-        lcd.display("\n".join(LCD_MESSAGES["azure_error"]), color="red")
-        logger.error(f"[ERROR] Azure sync failed: {e}")
+        lcd.display("\n".join(LCD_MESSAGES["db_error"]), color="red")
+        logger.error(f"[ERROR] Server sync failed: {e}")
         return False
 
     machine = db.get_machine(MACHINE_ID)

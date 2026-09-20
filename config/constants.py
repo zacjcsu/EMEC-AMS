@@ -48,13 +48,14 @@ CARD_GRACE_PERIOD_DEFAULT = 10  # fallback if not in system_settings
 LCD_LINE_DELAY = 2  # seconds
 LOCAL_DB_PATH = "data/local.db"
 
-# === Azure Environment Variables ===
-AZURE_ENV_KEYS = {
-    "host": os.getenv("AZURE_HOST"),
-    "user": os.getenv("AZURE_USER"),
-    "password": os.getenv("AZURE_PASSWORD"),
-    "database": os.getenv("AZURE_DATABASE"),
-    "ssl_ca": os.getenv("AZURE_SSL_CA")
+# === Database (PostgreSQL on the dashboard VM) ===
+DB_ENV = {
+    "host": os.getenv("DB_HOST"),
+    "port": int(os.getenv("DB_PORT", "5432")),
+    "user": os.getenv("DB_USER"),
+    "password": os.getenv("DB_PASS"),
+    "database": os.getenv("DB_NAME", "emec_access"),
+    "sslmode": os.getenv("DB_SSLMODE", "prefer"),
 }
 
 # === Required Settings from system_settings table ===
@@ -74,7 +75,7 @@ LCD_MESSAGES = {
     "startup_next": ["Scan CSU ID", "to start"],
     "maintenance": [f"{MACHINE_NAME}", "Out of order"],
     "internet_error": ["No Internet", "Connection"],
-    "azure_error": ["Azure Error", "Check conn."],
+    "db_error": ["Server Error", "Check conn."],
     "sync_error": ["Sync failed", "Check conn."]
 }
 

@@ -151,16 +151,16 @@ class LocalDB:
         )
         self.conn.commit()
 
-    def insert_session(self, session_id, csu_id, machine_id):
+    def insert_session(self, session_id, csu_id, machine_id, card_uid=None):
         now = utc_now_str()
         self.cursor.execute("SELECT machine_type FROM Machine WHERE machine_id = ?", (machine_id,))
         result = self.cursor.fetchone()
         machine_type = result["machine_type"] if result and result["machine_type"] else "Unknown"
 
         self.cursor.execute(
-            "INSERT INTO Machine_Usage (session_id, csu_id, machine_id, machine_type, start_time) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (session_id, csu_id, machine_id, machine_type, now)
+            "INSERT INTO Machine_Usage (session_id, csu_id, machine_id, machine_type, start_time, card_uid) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (session_id, csu_id, machine_id, machine_type, now, card_uid)
         )
         self.conn.commit()
 

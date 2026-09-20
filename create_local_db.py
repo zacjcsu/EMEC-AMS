@@ -125,6 +125,9 @@ def create_local_db():
         cur.execute("ALTER TABLE Access_Levels ADD COLUMN enabled INTEGER DEFAULT 1")
     # Replaced by Category_Permissions when permissions moved from machines to categories.
     cur.execute("DROP TABLE IF EXISTS Machine_Permissions")
+    usage_cols = [r[1] for r in cur.execute("PRAGMA table_info(Machine_Usage)")]
+    if "card_uid" not in usage_cols:
+        cur.execute("ALTER TABLE Machine_Usage ADD COLUMN card_uid TEXT")
     conn.commit()
     conn.close()
     logger.info(f"Local DB ready at {DB_PATH}")

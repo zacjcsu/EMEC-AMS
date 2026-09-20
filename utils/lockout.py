@@ -30,6 +30,7 @@ class LockoutMonitor:
         self.estop_active = False
         self.revoked_reason = None
         self._watched = None  # csu_id of the user on the machine
+        self._watched_card = None  # UID of the temporary card they signed in with, if any
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="lockout-monitor", daemon=True)
@@ -40,15 +41,19 @@ class LockoutMonitor:
     def stop(self):
         self._stop.set()
 
-    def watch(self, csu_id):
+    def watch(self, csu_id, temp_card_uid=None):
+        """Start watching a session. For a temporary card, also pass its UID: the card itself is re-checked
+        (lost, revoked, expired) as well as the person's access."""
         with self._lock:
-            if self._watched != str(csu_id):
+            if self._watched != str(csu_id) or self._watched_card != temp_card_uid:
                 self.revoked_reason = None
             self._watched = str(csu_id)
+            self._watched_card = temp_card_uid
 
     def unwatch(self):
         with self._lock:
             self._watched = None
+            self._watched_card = None
             self.revoked_reason = None
 
     def _set_estop(self, active):
@@ -59,10 +64,17 @@ class LockoutMonitor:
         logger.warning("[LOCKOUT] Emergency shutdown ACTIVE: relay locked off." if active
                        else "[LOCKOUT] Emergency shutdown lifted.")
 
-    def _check_access(self, conn, csu_id):
-        row = conn.execute(
-            "SELECT allowed, reason FROM access_decision_machine(%s, %s)",
-            (csu_id, self.machine_id)).fetchone()
+    def _check_access(self, conn, csu_id, temp_card_uid=None):
+        row = None
+        if temp_card_uid:
+            card = conn.execute(
+                "SELECT ok, reason FROM temp_card_lookup(%s::text)", (temp_card_uid,)).fetchone()
+            if card and not card["ok"]:
+                row = {"allowed": False, "reason": card["reason"]}
+        if row is None:
+            row = conn.execute(
+                "SELECT allowed, reason FROM access_decision_machine(%s, %s)",
+                (csu_id, self.machine_id)).fetchone()
         # unknown_machine means a registration problem, not that this user lost access.
         if row and not row["allowed"] and row["reason"] != "unknown_machine":
             with self._lock:
@@ -89,10 +101,10 @@ class LockoutMonitor:
                 self._set_estop(bool(row) and str(row["value"]).strip().lower() == "true")
 
                 with self._lock:
-                    watched = self._watched
+                    watched, watched_card = self._watched, self._watched_card
                 if (ENFORCE_ACCESS_DURING_SESSION and watched
                         and time.monotonic() - last_access_check >= ACCESS_RECHECK_SECONDS):
-                    self._check_access(conn, watched)
+                    self._check_access(conn, watched, watched_card)
                     last_access_check = time.monotonic()
 
                 if failing:

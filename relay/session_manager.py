@@ -14,6 +14,14 @@ REVOKED_MESSAGES = {
     "group_disabled": ("Access revoked", "Account locked"),
     "no_permission": ("Access revoked", "No permission"),
     "unknown_user": ("Access revoked", "Unknown user"),
+    # temporary cards
+    "card_lost": ("Card reported", "lost"),
+    "card_revoked": ("Card revoked", "Session ended"),
+    "card_retired": ("Card retired", "Session ended"),
+    "expired": ("Card expired", "Session ended"),
+    "no_active_issue": ("Card not active", "Session ended"),
+    "unknown_card": ("Card not valid", "Session ended"),
+    "not_temporary": ("Card not valid", "Session ended"),
 }
 
 class SessionManager:
@@ -29,6 +37,8 @@ class SessionManager:
         self.active_csu_id = None
         self.session_start_time = None
         self.display_name = None
+        self.active_card_uid = None   # UID of the physical card that started the session
+        self.active_temp = False      # True for a temporary card (recognised by UID, not by CSU ID)
         if self.lockout:
             self.lockout.unwatch()
 
@@ -43,24 +53,27 @@ class SessionManager:
         push_user_status(self.db, csu_id)
         push_machine_status(self.db, MACHINE_ID)
 
-    def start_session(self, csu_id, display_name):
+    def start_session(self, csu_id, display_name, card_uid=None, temp=False):
         if not self.active_session_id:
             self.active_session_id = str(uuid.uuid4())
             self.session_start_time = time.time()
             self.db.mark_user_active(csu_id)
-            self.db.insert_session(self.active_session_id, csu_id, MACHINE_ID)
-            logger.info(f"[SESSION] Started: {display_name} ({csu_id}), session_id: {self.active_session_id}")
+            self.db.insert_session(self.active_session_id, csu_id, MACHINE_ID, card_uid)
+            logger.info(f"[SESSION] Started: {display_name} ({csu_id}), session_id: {self.active_session_id}"
+                        + (f", TEMP card {card_uid}" if temp else ""))
         else:
             logger.info("[SESSION] Resumed session within grace period.")
 
         self.active_csu_id = csu_id
         self.display_name = display_name
+        self.active_card_uid = card_uid
+        self.active_temp = temp
         if self.lockout:
-            self.lockout.watch(csu_id)
+            self.lockout.watch(csu_id, card_uid if temp else None)
         self._sync_machine_status(STATUS_IN_USE, csu_id)
 
         self.relay.turn_on()
-        self._show(display_name[:16], "in use", color="green")
+        self._show(display_name[:16], "in use TEMP CARD" if temp else "in use", color="green")
 
     def _lockout_reason(self):
         """None, 'estop', or the server's reason the signed-in user lost access."""
@@ -76,6 +89,18 @@ class SessionManager:
         self._show(line1, line2, color="red", delay=LCD_LINE_DELAY)
         self.force_end_session()
 
+    def _classify(self, scan):
+        """'same' if `scan` is the card that started this session, 'other' if it is a different card,
+        'absent' if there is no card. A temporary card is recognised by its UID (it has no CSU ID); a student
+        card by its CSU ID, as before. An unreadable non-student card during a student session counts as absent."""
+        if scan is None:
+            return "absent"
+        if self.active_temp:
+            return "same" if scan.uid_hex == self.active_card_uid else "other"
+        if scan.csu_id is None:
+            return "absent"
+        return "same" if scan.csu_id == self.active_csu_id else "other"
+
     def wait_for_card_removal(self, reader):
         """Watch the card while the session runs. Returns why the wait ended:
         'removed'  the card left the reader: the caller starts the grace period;
@@ -88,16 +113,14 @@ class SessionManager:
             if reason:
                 self._end_for_lockout(reason)
                 return reason
-            scan = reader.read_card()
-            if scan:
-                uid, csu_id = scan
-                if csu_id == self.active_csu_id:
-                    absence_start = None
-                else:
-                    logger.info("[SESSION] New card detected mid-session.")
-                    self._show("New card mid-sesh", "Resetting...", color="red", delay=LCD_LINE_DELAY)
-                    self.force_end_session()
-                    return "new_card"
+            state = self._classify(reader.read_card_ex())
+            if state == "same":
+                absence_start = None
+            elif state == "other":
+                logger.info("[SESSION] New card detected mid-session.")
+                self._show("New card mid-sesh", "Resetting...", color="red", delay=LCD_LINE_DELAY)
+                self.force_end_session()
+                return "new_card"
             else:
                 if absence_start is None:
                     absence_start = time.time()
@@ -117,17 +140,15 @@ class SessionManager:
             remaining = int(end_time - time.time())
             self.lcd.display("Remove detected", f"Reinsert: {remaining}s", color="yellow")
 
-            scan = reader.read_card()
-            if scan:
-                uid, csu_id = scan
-                if csu_id == self.active_csu_id:
-                    self._show("Session", "resumed", color="green", delay=1)
-                    self.start_session(csu_id, self.display_name)
-                    return "resumed"
-                else:
-                    self._show("New card at grace", "Resetting...", color="red", delay=LCD_LINE_DELAY)
-                    self.force_end_session()
-                    return "new_card"
+            state = self._classify(reader.read_card_ex())
+            if state == "same":
+                self._show("Session", "resumed", color="green", delay=1)
+                self.start_session(self.active_csu_id, self.display_name, self.active_card_uid, self.active_temp)
+                return "resumed"
+            elif state == "other":
+                self._show("New card at grace", "Resetting...", color="red", delay=LCD_LINE_DELAY)
+                self.force_end_session()
+                return "new_card"
             time.sleep(1)
 
         self.force_end_session()

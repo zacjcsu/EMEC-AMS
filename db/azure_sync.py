@@ -137,26 +137,26 @@ def sync_session_to_azure(session_id):
     try:
         conn_local = sqlite3.connect(LOCAL_DB_PATH)
         cur = conn_local.cursor()
-        cur.execute("SELECT session_id, csu_id, machine_id, machine_type, start_time, end_time, duration FROM Machine_Usage WHERE session_id = ?", (session_id,))
+        cur.execute("SELECT session_id, csu_id, machine_id, machine_type, start_time, end_time, duration, card_uid FROM Machine_Usage WHERE session_id = ?", (session_id,))
         row = cur.fetchone()
         if not row:
             conn_local.close()
             return
-        session_id, csu_id, machine_id, machine_type, start_time, end_time, duration = row
+        session_id, csu_id, machine_id, machine_type, start_time, end_time, duration, card_uid = row
 
         with get_azure_connection() as conn:
             with conn.cursor() as cur_pg:
                 # Upsert without depending on which unique key the table has.
                 cur_pg.execute(
                     "UPDATE machine_usage SET csu_id = %s, machine_id = %s, machine_type = %s, "
-                    "start_time = %s, end_time = %s, duration = %s WHERE session_id = %s",
-                    (csu_id, machine_id, machine_type, start_time, end_time, duration, session_id),
+                    "start_time = %s, end_time = %s, duration = %s, card_uid = %s WHERE session_id = %s",
+                    (csu_id, machine_id, machine_type, start_time, end_time, duration, card_uid, session_id),
                 )
                 if cur_pg.rowcount == 0:
                     cur_pg.execute(
-                        "INSERT INTO machine_usage (session_id, csu_id, machine_id, machine_type, start_time, end_time, duration) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                        (session_id, csu_id, machine_id, machine_type, start_time, end_time, duration),
+                        "INSERT INTO machine_usage (session_id, csu_id, machine_id, machine_type, start_time, end_time, duration, card_uid) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                        (session_id, csu_id, machine_id, machine_type, start_time, end_time, duration, card_uid),
                     )
 
         cur.execute("DELETE FROM Machine_Usage WHERE session_id = ?", (session_id,))
@@ -264,3 +264,4 @@ def push_access_requests():
         logger.info("[SYNC] Access requests synced to server")
     except Exception as e:
         logger.error(f"[SYNC] Access request sync failed: {e}")
+

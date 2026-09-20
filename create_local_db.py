@@ -97,6 +97,14 @@ CREATE TABLE IF NOT EXISTS Machine_Usage (
     duration INTEGER
 );
 
+-- LAST SESSION on this machine (one row, refreshed by the sync; drives the idle "Last Used" screen)
+CREATE TABLE IF NOT EXISTS Last_Session (
+    session_id TEXT PRIMARY KEY,
+    csu_id TEXT,
+    name TEXT,
+    end_time TEXT
+);
+
 -- SYSTEM SETTINGS
 CREATE TABLE IF NOT EXISTS System_Settings (
     setting TEXT PRIMARY KEY,

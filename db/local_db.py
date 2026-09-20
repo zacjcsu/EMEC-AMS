@@ -62,6 +62,14 @@ class LocalDB:
         self.cursor.execute("SELECT * FROM Users WHERE csu_id = ?", (csu_id,))
         return self.cursor.fetchone()
 
+    def get_last_user(self):
+        """Name (or CSU ID if the user has no name) of whoever last used this machine, or None."""
+        self.cursor.execute("SELECT csu_id, name FROM Last_Session LIMIT 1")
+        row = self.cursor.fetchone()
+        if not row:
+            return None
+        return row["name"] or row["csu_id"]
+
     def access_decision(self, csu_id, machine_id, at=None):
         """(allowed, reason, via) for this user on this machine's category, from the local cache.
         Mirrors the server's access_decision_machine(); see db/access_rule.py."""

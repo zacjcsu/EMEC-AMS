@@ -66,6 +66,12 @@ PULL_QUERIES = {
         "FROM access_requests WHERE status = 'under review' AND machine_id = %s",
         (MACHINE_ID,),
     ),
+    "Last_Session": (
+        "SELECT mu.session_id, mu.csu_id, u.name, mu.end_time::text AS end_time "
+        "FROM machine_usage mu LEFT JOIN users u ON u.csu_id = mu.csu_id "
+        "WHERE mu.machine_id = %s ORDER BY mu.start_time DESC LIMIT 1",
+        (MACHINE_ID,),
+    ),
     "System_Settings": (
         "SELECT setting, value, description, last_updated::text AS last_updated FROM system_settings",
         (),

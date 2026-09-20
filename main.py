@@ -8,6 +8,7 @@ from relay.session_manager import SessionManager
 from relay.controller import RelayController
 from lcd.lcd import LCD
 from utils.leds import StatusLEDs
+from utils.idle_display import IdleDisplay
 import time
 import signal
 import sys
@@ -40,6 +41,7 @@ relay = RelayController()
 leds = StatusLEDs()
 reader = RFIDReader(leds=leds)
 session_mgr = SessionManager(db, lcd, relay)
+idle = IdleDisplay(lcd, db)
 
 def exit_handler(sig, frame):
     # De-energise first: everything below can raise, and the machine must not
@@ -63,6 +65,7 @@ def main():
                 time.sleep(5)
                 continue
 
+            idle.reset()
             while True:
                 scan = reader.read_card()
                 if scan:
@@ -72,6 +75,9 @@ def main():
                         break
                     else:
                         startup_sequence(lcd, db)
+                    idle.reset()
+                else:
+                    idle.tick()
                 time.sleep(CARD_POLL_INTERVAL)
 
             session_mgr.start_session(validated_csu_id, display_name)

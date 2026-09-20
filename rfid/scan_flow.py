@@ -1,0 +1,200 @@
+"""What to do with whatever is on the reader while the machine is idle (dashboard contract:
+PI_ACCESS_CHECK.md, "Temporary cards"). Runs on the main thread, the only one that touches the reader.
+
+Order: the normal student-card path first and unchanged. Only when the card is not a student card is
+temp_card_lookup() called. A temp card that checks out goes through the same access check as anyone else.
+Cards that did not start a session are reported to the dashboard so a temp card can be programmed on this reader.
+"""
+import logging
+import time
+from config.constants import LCD_LINE_DELAY, LCD_MESSAGES
+from db.azure_sync import temp_card_lookup, temp_card_verify, temp_card_finish
+from rfid.card_io import CardIO, CardLost, data_block
+from rfid.temp_writer import program_card
+from rfid.validator import validate_card
+
+logger = logging.getLogger("scan_flow")
+
+# Screen text for a temporary card that is refused (16 chars per line).
+REJECT_TEXT = {
+    "card_lost": ("Card reported", "lost"),
+    "card_revoked": ("Card revoked", "See staff"),
+    "card_retired": ("Card retired", "See staff"),
+    "expired": ("Card expired", "See staff"),
+    "no_active_issue": ("Card not active", "See staff"),
+    "bad_secret": ("Card not valid", "See staff"),
+    "read_failed": ("Card not valid", "See staff"),
+}
+
+LOOKUP_TTL = 2.0      # seconds a lookup result is reused for a card that stays on the reader
+MISSES_TO_REMOVE = 3  # polls with no card before it counts as removed (debounce)
+
+
+class SessionStart:
+    def __init__(self, csu_id, display_name, card_uid, temp):
+        self.csu_id, self.display_name, self.card_uid, self.temp = csu_id, display_name, card_uid, temp
+
+
+class ScanFlow:
+    def __init__(self, reader, db, lcd, relay, activity):
+        self.reader = reader
+        self.io = CardIO(reader.reader)
+        self.db, self.lcd, self.relay, self.activity = db, lcd, relay, activity
+        self._reset_arrival(None)
+        self._misses = 0
+
+    def _reset_arrival(self, uid_hex):
+        self._uid = uid_hex
+        self._blank = None
+        self._lookup = None        # (time, result) cached per arrival
+        self._shown = False        # a rejection was already put on the LCD for this arrival
+        self._denied = False       # this arrival was refused; do not retry until the card is removed and returns
+
+    # ------------------------------------------------------------ polling
+    def session_started(self):
+        """The card in the reader now belongs to a session; forget the arrival."""
+        self._reset_arrival(None)
+        self.activity.set_present(None)
+
+    def no_card(self):
+        """Call on every idle poll that sees no card. After a few in a row the card counts as removed."""
+        self._misses += 1
+        if self._misses >= MISSES_TO_REMOVE and self._uid is not None:
+            self._reset_arrival(None)
+            self.activity.set_present(None)
+
+    def process(self, scan):
+        """Handle a card on the reader. Returns a SessionStart if the card started a session, else None
+        (having shown a message and/or reported the card to the dashboard)."""
+        self._misses = 0
+        if scan.uid_hex != self._uid:
+            self._reset_arrival(scan.uid_hex)
+
+        if scan.csu_id is not None:                      # a student card: the normal path, unchanged
+            csu_id, name = validate_card(scan.csu_id, scan.uid_num, self.db, self.lcd, self.relay)
+            if csu_id:
+                self.activity.set_present(None)
+                return SessionStart(csu_id, name, scan.uid_hex, False)
+            self.activity.set_present(scan.uid_hex, blank=False)   # a student card is never blank
+            return None
+
+        return self._not_a_student_card(scan)
+
+    # ------------------------------------------------------------ not a student card
+    def _cached_lookup(self, uid_hex):
+        now = time.monotonic()
+        if self._lookup and now - self._lookup[0] < LOOKUP_TTL:
+            return self._lookup[1]
+        result = temp_card_lookup(uid_hex)
+        self._lookup = (now, result)
+        return result
+
+    def _reject(self, line1, line2):
+        """Show a refusal once per arrival, not on every poll while the card rests on the reader."""
+        if not self._shown:
+            self.lcd.display(line1, line2, color="red")
+            time.sleep(LCD_LINE_DELAY)
+            self.lcd.display(*LCD_MESSAGES["startup_next"])
+            self._shown = True
+
+    def _not_a_student_card(self, scan):
+        lk = self._cached_lookup(scan.uid_hex)
+        if lk is None:
+            # Temp cards are online only; never fall back to a local copy.
+            self._reject("Server offline", "Card not read")
+            return None                                   # nothing reported: the server is unreachable
+
+        if lk["ok"] and not self._denied:
+            started = self._temp_login(scan, lk)
+            if started:
+                self.activity.set_present(None)
+                return started
+        elif lk["reason"] in REJECT_TEXT:
+            self._reject(*REJECT_TEXT[lk["reason"]])
+        # unknown_card / not_temporary: silent, as any unrecognised card is today
+
+        self._report_presence(scan)
+        return None
+
+    def _report_presence(self, scan):
+        """Report a card that did not start a session, with the blank check done once per arrival."""
+        if self._blank is None:
+            try:
+                self._blank = self.io.is_blank()
+            except CardLost:
+                return          # gone again; the next poll starts over
+            except Exception:
+                logger.exception("[SCAN] Blank check failed")
+                self._blank = False
+            logger.info(f"[SCAN] Card {scan.uid_hex} on the reader, blank={self._blank}")
+        self.activity.set_present(scan.uid_hex, self._blank)
+
+    def _temp_login(self, scan, lk):
+        """Steps 3 to 5 of the contract: read the secret with the issue's key, verify it, then the normal access check."""
+        sector = int(lk["sector"])
+        key = list(lk["sector_key"])
+        try:
+            self.io.fresh()
+            if not self.io.auth(data_block(sector), key):
+                logger.warning(f"[TEMP] {scan.uid_hex}: authentication with the issue key failed")
+                self._denied = True
+                self._reject(*REJECT_TEXT["read_failed"])
+                return None
+            secret = self.io.read(data_block(sector))
+            self.io.r.MFRC522_StopCrypto1()
+        except CardLost:
+            return None
+        if not secret or len(secret) != 16:
+            self._denied = True
+            self._reject(*REJECT_TEXT["read_failed"])
+            return None
+
+        v = temp_card_verify(scan.uid_hex, secret)
+        if v is None:
+            self._reject("Server offline", "Card not read")
+            return None
+        if not v["allowed"]:
+            logger.warning(f"[TEMP] {scan.uid_hex}: verify refused ({v['reason']})")
+            self._denied = True
+            self._reject(*REJECT_TEXT.get(v["reason"], ("Card not valid", "See staff")))
+            return None
+
+        csu_id, name = validate_card(v["csu_id"], None, self.db, self.lcd, self.relay, temp=True)
+        if not csu_id:
+            self._denied = True       # the person is not allowed on this machine right now
+            self.lcd.display(*LCD_MESSAGES["startup_next"])
+            return None
+        return SessionStart(csu_id, name, scan.uid_hex, True)
+
+    # ------------------------------------------------------------ programming jobs
+    def run_job(self, job):
+        """Program the card on the reader for a claimed job, report the outcome, and wait for the card to be removed."""
+        logger.info(f"[TEMP] Programming job {job['issue_id']} for card {job['card_uid']}")
+        self.activity.set_present(None)
+        self.lcd.display("Programming", "card...", color="yellow")
+        ok, detail = program_card(self.io, job)
+        answer = None
+        for attempt in range(3):
+            answer = temp_card_finish(job["issue_id"], ok, detail)
+            if answer is not None:
+                break
+            time.sleep(1)
+        logger.info(f"[TEMP] Job {job['issue_id']}: ok={ok} detail={detail} server={answer}")
+
+        if ok and answer == "active":
+            self.lcd.display("Card ready", "Remove card", color="green")
+        elif ok:
+            self.lcd.display("Card written", "See dashboard", color="yellow")
+        else:
+            self.lcd.display("Write failed", str(detail or "")[:16], color="red")
+        # The card stays on the reader after programming; do not let it start a session until it is removed.
+        self._wait_for_removal(max_seconds=60)
+        self._reset_arrival(None)
+        self.lcd.display(*LCD_MESSAGES["startup_next"])
+
+    def _wait_for_removal(self, max_seconds):
+        end = time.time() + max_seconds
+        misses = 0
+        while time.time() < end and misses < MISSES_TO_REMOVE:
+            misses = misses + 1 if self.reader.read_card_ex() is None else 0
+            time.sleep(0.5)

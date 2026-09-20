@@ -265,3 +265,66 @@ def push_access_requests():
     except Exception as e:
         logger.error(f"[SYNC] Access request sync failed: {e}")
 
+
+# ---------------------------------------------------------------- temporary cards
+# The Pi never reads card_issues (it holds keys and secrets). It calls these SECURITY DEFINER functions
+# (migrations 005 and 006, contract in the dashboard repo's db/PI_ACCESS_CHECK.md). Each returns None when
+# the server cannot be reached, so callers can tell "offline" from "no".
+
+def _with_conn(conn, fn):
+    if conn is not None:
+        return fn(conn)
+    with get_azure_connection(timeout=3) as c:
+        return fn(c)
+
+
+def temp_card_lookup(uid_hex, conn=None):
+    """dict(ok, reason, issue_id, sector, sector_key) or None if the server is unreachable."""
+    try:
+        row = _with_conn(conn, lambda c: c.execute(
+            "SELECT ok, reason, issue_id, sector, sector_key FROM temp_card_lookup(%s::text)", (uid_hex,)).fetchone())
+        return dict(row) if row else None
+    except Exception as e:
+        logger.warning(f"[TEMP] temp_card_lookup failed: {e}")
+        return None
+
+
+def temp_card_verify(uid_hex, secret, conn=None):
+    """dict(allowed, reason, csu_id, issue_id) or None if the server is unreachable."""
+    try:
+        row = _with_conn(conn, lambda c: c.execute(
+            "SELECT allowed, reason, csu_id, issue_id FROM temp_card_verify(%s::text, %s::bytea)",
+            (uid_hex, bytes(secret))).fetchone())
+        return dict(row) if row else None
+    except Exception as e:
+        logger.warning(f"[TEMP] temp_card_verify failed: {e}")
+        return None
+
+
+def report_card_present(machine_id, uid_hex, blank, conn=None):
+    _with_conn(conn, lambda c: c.execute(
+        "SELECT report_card_present(%s::text, %s::text, %s::boolean)", (machine_id, uid_hex, bool(blank))))
+
+
+def report_card_removed(machine_id, conn=None):
+    _with_conn(conn, lambda c: c.execute("SELECT report_card_removed(%s::text)", (machine_id,)))
+
+
+def temp_card_claim_job(machine_id, conn=None):
+    """The programming job aimed at this machine, as a dict, or None when there is nothing to do."""
+    row = _with_conn(conn, lambda c: c.execute(
+        "SELECT issue_id, card_uid, sector, sector_key, secret, previous_keys, duration_seconds "
+        "FROM temp_card_claim_job(%s::text)", (machine_id,)).fetchone())
+    return dict(row) if row else None
+
+
+def temp_card_finish(issue_id, ok, detail=None, conn=None):
+    """Report the outcome of a job; returns the server's answer ('active', 'failed', 'not_writing') or None."""
+    try:
+        row = _with_conn(conn, lambda c: c.execute(
+            "SELECT temp_card_finish(%s::bigint, %s::boolean, %s::text) AS r",
+            (issue_id, bool(ok), (detail or None) and str(detail)[:300])).fetchone())
+        return row["r"] if row else None
+    except Exception as e:
+        logger.error(f"[TEMP] temp_card_finish failed: {e}")
+        return None

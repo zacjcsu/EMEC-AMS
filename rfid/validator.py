@@ -7,8 +7,10 @@ from config.constants import STATUS_IN_USE, LCD_LINE_DELAY
 
 logger = logging.getLogger("validator")
 
-def validate_card(csu_id, uid_num, db, lcd, relay):
-    logger.info(f"[VALIDATOR] Card scanned: {csu_id}")
+def validate_card(csu_id, uid_num, db, lcd, relay, temp=False):
+    """Access check for a person. `temp` marks a temporary card: uid_num is then None, so no student UID is
+    recorded against the user or their access request."""
+    logger.info(f"[VALIDATOR] {'Temp card' if temp else 'Card'} scanned: {csu_id}")
     # Ask the server so dashboard changes apply to this scan; the local cache is only a fallback.
     decision = remote_access_decision(csu_id, MACHINE_ID)
     source = "server"
@@ -53,7 +55,7 @@ def validate_card(csu_id, uid_num, db, lcd, relay):
 
     display_name = user["name"] if user and user["name"] else str(csu_id)
 
-    if db.ensure_user_uid(csu_id, uid_num):
+    if uid_num is not None and db.ensure_user_uid(csu_id, uid_num):
         logger.info(f"[SYNC] UID updated for {csu_id}, syncing to server")
         push_user_update(csu_id)
 

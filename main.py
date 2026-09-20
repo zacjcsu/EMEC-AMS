@@ -3,7 +3,8 @@
 from utils import hardware_stubs  # noqa: F401  (must be imported first, see utils/hardware_stubs.py)
 from utils.startup_check import startup_sequence
 from rfid.reader import RFIDReader
-from rfid.validator import validate_card
+from rfid.scan_flow import ScanFlow
+from utils.card_activity import CardActivity
 from relay.session_manager import SessionManager
 from relay.controller import RelayController
 from lcd.lcd import LCD
@@ -46,6 +47,8 @@ lockout = LockoutMonitor(relay)
 heartbeat = HeartbeatMonitor(MACHINE_ID)
 session_mgr = SessionManager(db, lcd, relay, lockout)
 idle = IdleDisplay(lcd, db, lockout)
+activity = CardActivity(MACHINE_ID)
+flow = ScanFlow(reader, db, lcd, relay, activity)
 
 def exit_handler(sig, frame):
     # De-energise first: everything below can raise, and the machine must not
@@ -70,6 +73,7 @@ signal.signal(signal.SIGTERM, exit_handler)
 def main():
     lockout.start()
     heartbeat.start()
+    activity.start()
     while True:
         try:
             if not startup_sequence(lcd, db):
@@ -82,20 +86,26 @@ def main():
                     idle.tick()
                     time.sleep(CARD_POLL_INTERVAL)
                     continue
-                scan = reader.read_card()
+                job = activity.take_job()
+                if job:
+                    flow.run_job(job)
+                    idle.reset()
+                    continue
+                scan = reader.read_card_ex()
                 if scan:
-                    uid_num, csu_id = scan
-                    validated_csu_id, display_name = validate_card(csu_id, uid_num, db, lcd, relay)
-                    if validated_csu_id:
+                    started = flow.process(scan)
+                    if started:
                         break
-                    else:
-                        startup_sequence(lcd, db)
+                    if scan.csu_id is not None:
+                        startup_sequence(lcd, db)   # a refused student card: refresh the cache and the screen
                     idle.reset()
                 else:
+                    flow.no_card()
                     idle.tick()
                 time.sleep(CARD_POLL_INTERVAL)
 
-            session_mgr.start_session(validated_csu_id, display_name)
+            flow.session_started()
+            session_mgr.start_session(started.csu_id, started.display_name, started.card_uid, started.temp)
             # The grace period only applies when the card was removed. If the server or a new card already
             # ended the session (lost card, revoke, expiry, emergency stop), there is nothing to resume.
             if session_mgr.wait_for_card_removal(reader) == "removed":

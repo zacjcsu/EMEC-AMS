@@ -66,6 +66,8 @@ ENFORCE_ACCESS_DURING_SESSION = True  # re-check the signed-in user against the 
 ACCESS_RECHECK_SECONDS = 5       # ...this often (lab closing, group disabled, permission revoked)
 HEARTBEAT_PUSH_SECONDS = 30      # how often machine.last_heartbeat is refreshed on the server
 RESTART_POLL_SECONDS = 5         # how often machine.restart_requested_at is checked
+CARD_REPORT_SECONDS = 2          # temp cards: presence report and job poll interval while a card rests on the reader
+CARD_REPORT_MAX_AGE = 3          # ...and presence stops being reported if the main loop has not refreshed it this recently
 
 # === Required Settings from system_settings table ===
 REQUIRED_SYSTEM_SETTINGS = [

@@ -11,6 +11,7 @@ from config.constants import (
     MACHINE_NAME,
     MACHINE_TYPE,
     LCD_LINE_DELAY,
+    DB_ENV,
     DEVICE_ID as device_id
 )
 from db.azure_sync import sync_local_from_azure, push_machine_status
@@ -31,6 +32,16 @@ def get_public_ip():
     except:
         return "0.0.0.0"
 
+def get_local_ip():
+    """The address this Pi uses to reach the server: what the dashboard must call for /ping and
+    /restart. (The public address is a shared NAT address the server cannot reach.)"""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect((DB_ENV["host"], DB_ENV["port"]))  # UDP: sends nothing, just picks the route
+            return s.getsockname()[0]
+    except Exception:
+        return None
+
 def startup_sequence(lcd, db):
     logger.info("[STEP] Starting system checks...")
 
@@ -40,8 +51,9 @@ def startup_sequence(lcd, db):
         return False
 
     logger.info("[PASS] Internet check passed.")
-    device_ip = get_public_ip()
-    logger.info(f"[PASS] Public IP: {device_ip}")
+    logger.info(f"[PASS] Public IP: {get_public_ip()}")
+    device_ip = get_local_ip() or get_public_ip()
+    logger.info(f"[PASS] Device IP (reported to dashboard): {device_ip}")
 
     try:
         lcd.display("Syncing online")

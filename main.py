@@ -10,6 +10,7 @@ from lcd.lcd import LCD
 from utils.leds import StatusLEDs
 from utils.idle_display import IdleDisplay
 from utils.lockout import LockoutMonitor
+from utils.heartbeat import HeartbeatMonitor
 import time
 import signal
 import sys
@@ -42,6 +43,7 @@ relay = RelayController()
 leds = StatusLEDs()
 reader = RFIDReader(leds=leds)
 lockout = LockoutMonitor(relay)
+heartbeat = HeartbeatMonitor(MACHINE_ID)
 session_mgr = SessionManager(db, lcd, relay, lockout)
 idle = IdleDisplay(lcd, db, lockout)
 
@@ -67,6 +69,7 @@ signal.signal(signal.SIGTERM, exit_handler)
 
 def main():
     lockout.start()
+    heartbeat.start()
     while True:
         try:
             if not startup_sequence(lcd, db):

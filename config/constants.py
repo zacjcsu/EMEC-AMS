@@ -64,6 +64,8 @@ DB_ENV = {
 EMERGENCY_POLL_SECONDS = 2       # how often system_settings.emergency_shutdown is checked
 ENFORCE_ACCESS_DURING_SESSION = True  # re-check the signed-in user against the server mid-session
 ACCESS_RECHECK_SECONDS = 5       # ...this often (lab closing, group disabled, permission revoked)
+HEARTBEAT_PUSH_SECONDS = 30      # how often machine.last_heartbeat is refreshed on the server
+RESTART_POLL_SECONDS = 5         # how often machine.restart_requested_at is checked
 
 # === Required Settings from system_settings table ===
 REQUIRED_SYSTEM_SETTINGS = [

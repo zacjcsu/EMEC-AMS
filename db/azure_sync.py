@@ -13,7 +13,7 @@ from utils.timeutil import utc_now_str
 logger = logging.getLogger("azure_sync")
 
 
-def get_azure_connection():
+def get_azure_connection(timeout=10):
     return psycopg.connect(
         host=DB_ENV["host"],
         port=DB_ENV["port"],
@@ -21,7 +21,7 @@ def get_azure_connection():
         password=DB_ENV["password"],
         dbname=DB_ENV["database"],
         sslmode=DB_ENV["sslmode"],
-        connect_timeout=10,
+        connect_timeout=timeout,
         row_factory=dict_row,
     )
 
@@ -109,6 +109,22 @@ def sync_local_from_azure():
                 logger.info(f"[SYNC] Pulled {len(rows)} rows from server -> {table}")
     finally:
         conn_local.close()
+
+
+def remote_access_decision(csu_id, machine_id):
+    """(allowed, reason, via) straight from the server's access_decision_machine(), so a change made
+    on the dashboard applies to the very next scan. Returns None if the server can't be reached;
+    the caller then falls back to the local cache."""
+    try:
+        with get_azure_connection(timeout=3) as conn:
+            row = conn.execute(
+                "SELECT allowed, reason, via FROM access_decision_machine(%s, %s)",
+                (str(csu_id), machine_id),
+            ).fetchone()
+        return row["allowed"], row["reason"], row["via"]
+    except Exception as e:
+        logger.warning(f"[SYNC] Live access check failed, using local cache: {e}")
+        return None
 
 
 def sync_session_to_azure(session_id):

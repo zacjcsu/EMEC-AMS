@@ -1,6 +1,6 @@
 import time
 import logging
-from db.azure_sync import sync_local_from_azure, push_access_requests, push_user_update
+from db.azure_sync import sync_local_from_azure, push_access_requests, push_user_update, remote_access_decision
 from config.constants import MACHINE_ID
 from utils.startup_check import startup_sequence
 from config.constants import STATUS_IN_USE, LCD_LINE_DELAY
@@ -9,9 +9,23 @@ logger = logging.getLogger("validator")
 
 def validate_card(csu_id, uid_num, db, lcd, relay):
     logger.info(f"[VALIDATOR] Card scanned: {csu_id}")
+    # Ask the server so dashboard changes apply to this scan; the local cache is only a fallback.
+    decision = remote_access_decision(csu_id, MACHINE_ID)
+    source = "server"
+    if decision is None:
+        decision = db.access_decision(csu_id, MACHINE_ID)
+        source = "local cache"
+    allowed, reason, via = decision
+    logger.info(f"[VALIDATOR] Decision for {csu_id} ({source}): allowed={allowed} reason={reason} via={via}")
+
     user = db.get_user(csu_id)
-    allowed, reason, via = db.access_decision(csu_id, MACHINE_ID)
-    logger.info(f"[VALIDATOR] Decision for {csu_id}: allowed={allowed} reason={reason} via={via}")
+    if allowed and not user:
+        # Approved on the dashboard since the last sync; pull it so the name and UID are known.
+        try:
+            sync_local_from_azure()
+            user = db.get_user(csu_id)
+        except Exception as e:
+            logger.error(f"[VALIDATOR] Sync for new user failed: {e}")
 
     if reason in ("unknown_user", "no_permission"):
         lcd.display("Access Denied", "Raising req",  color="red")
@@ -37,7 +51,7 @@ def validate_card(csu_id, uid_num, db, lcd, relay):
         time.sleep(LCD_LINE_DELAY)
         return None, None
 
-    display_name = user["name"] if user["name"] else str(csu_id)
+    display_name = user["name"] if user and user["name"] else str(csu_id)
 
     if db.ensure_user_uid(csu_id, uid_num):
         logger.info(f"[SYNC] UID updated for {csu_id}, syncing to server")

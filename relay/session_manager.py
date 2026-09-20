@@ -7,8 +7,18 @@ from config.constants import STATUS_NEUTRAL, STATUS_IN_USE, LCD_LINE_DELAY
 
 logger = logging.getLogger("session")
 
+# Screen text when a running session is ended by the server (16 chars per line).
+REVOKED_MESSAGES = {
+    "estop": ("EMERGENCY", "SHUTDOWN"),
+    "outside_hours": ("Lab closed", "Session ended"),
+    "group_disabled": ("Access revoked", "Account locked"),
+    "no_permission": ("Access revoked", "No permission"),
+    "unknown_user": ("Access revoked", "Unknown user"),
+}
+
 class SessionManager:
-    def __init__(self, db, lcd, relay):
+    def __init__(self, db, lcd, relay, lockout=None):
+        self.lockout = lockout
         self.db = db
         self.lcd = lcd
         self.relay = relay
@@ -19,6 +29,8 @@ class SessionManager:
         self.active_csu_id = None
         self.session_start_time = None
         self.display_name = None
+        if self.lockout:
+            self.lockout.unwatch()
 
     def _show(self, line1, line2, color, delay=0):
         self.lcd.display(line1, line2, color=color)
@@ -43,14 +55,34 @@ class SessionManager:
 
         self.active_csu_id = csu_id
         self.display_name = display_name
+        if self.lockout:
+            self.lockout.watch(csu_id)
         self._sync_machine_status(STATUS_IN_USE, csu_id)
 
         self.relay.turn_on()
         self._show(display_name[:16], "in use", color="green")
 
+    def _lockout_reason(self):
+        """None, 'estop', or the server's reason the signed-in user lost access."""
+        if not self.lockout:
+            return None
+        if self.lockout.estop_active:
+            return "estop"
+        return self.lockout.revoked_reason
+
+    def _end_for_lockout(self, reason):
+        logger.warning(f"[SESSION] Ending session: {reason}.")
+        line1, line2 = REVOKED_MESSAGES.get(reason, ("Access revoked", str(reason)))
+        self._show(line1, line2, color="red", delay=LCD_LINE_DELAY)
+        self.force_end_session()
+
     def wait_for_card_removal(self, reader):
         absence_start = None
         while True:
+            reason = self._lockout_reason()
+            if reason:
+                self._end_for_lockout(reason)
+                break
             scan = reader.read_card()
             if scan:
                 uid, csu_id = scan
@@ -73,6 +105,10 @@ class SessionManager:
         grace_period = int(self.db.get_setting("grace_period_seconds", default=CARD_GRACE_PERIOD_DEFAULT))
         end_time = time.time() + grace_period
         while time.time() < end_time:
+            reason = self._lockout_reason()
+            if reason:
+                self._end_for_lockout(reason)
+                return reason
             remaining = int(end_time - time.time())
             self.lcd.display("Remove detected", f"Reinsert: {remaining}s", color="yellow")
 

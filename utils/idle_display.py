@@ -8,7 +8,9 @@ class IdleDisplay:
     """While nobody is on the machine, alternate the scan prompt with who used it last, so the
     last user can be read off the machine without opening the dashboard."""
 
-    def __init__(self, lcd, db):
+    def __init__(self, lcd, db, lockout=None):
+        self.lockout = lockout
+        self.showing_estop = False
         self.lcd = lcd
         self.db = db
         self.reset()
@@ -19,6 +21,16 @@ class IdleDisplay:
         self.since = time.monotonic()
 
     def tick(self):
+        if self.lockout and self.lockout.estop_active:
+            if not self.showing_estop:
+                self.lcd.display("EMERGENCY", "SHUTDOWN", color="red")
+                self.showing_estop = True
+            return
+        if self.showing_estop:
+            self.showing_estop = False
+            self.lcd.display(*LCD_MESSAGES["startup_next"])
+            self.reset()
+            return
         now = time.monotonic()
         if not self.showing_last:
             if now - self.since >= IDLE_SCAN_SCREEN_SECONDS:

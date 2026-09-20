@@ -9,6 +9,7 @@ from relay.controller import RelayController
 from lcd.lcd import LCD
 from utils.leds import StatusLEDs
 from utils.idle_display import IdleDisplay
+from utils.lockout import LockoutMonitor
 import time
 import signal
 import sys
@@ -40,13 +41,19 @@ db = LocalDB()
 relay = RelayController()
 leds = StatusLEDs()
 reader = RFIDReader(leds=leds)
-session_mgr = SessionManager(db, lcd, relay)
-idle = IdleDisplay(lcd, db)
+lockout = LockoutMonitor(relay)
+session_mgr = SessionManager(db, lcd, relay, lockout)
+idle = IdleDisplay(lcd, db, lockout)
 
 def exit_handler(sig, frame):
     # De-energise first: everything below can raise, and the machine must not
     # be left live by a failed shutdown.
     relay.turn_off()
+    # Close any open session so its usage is recorded (this is also how a dashboard restart lands).
+    try:
+        session_mgr.force_end_session()
+    except Exception:
+        logger.exception("[SHUTDOWN] Could not close the session.")
     lcd.display("Shutting down...")
     db.update_machine_status(MACHINE_ID, STATUS_OFFLINE)
     db.update_machine_heartbeat(MACHINE_ID)
@@ -59,6 +66,7 @@ signal.signal(signal.SIGINT, exit_handler)
 signal.signal(signal.SIGTERM, exit_handler)
 
 def main():
+    lockout.start()
     while True:
         try:
             if not startup_sequence(lcd, db):
@@ -67,6 +75,10 @@ def main():
 
             idle.reset()
             while True:
+                if lockout.estop_active:
+                    idle.tick()
+                    time.sleep(CARD_POLL_INTERVAL)
+                    continue
                 scan = reader.read_card()
                 if scan:
                     uid_num, csu_id = scan

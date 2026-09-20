@@ -60,6 +60,11 @@ DB_ENV = {
     "sslmode": os.getenv("DB_SSLMODE", "prefer"),
 }
 
+# === Dashboard control (all pull-based: the Pi talks to the database, nothing calls into the Pi) ===
+EMERGENCY_POLL_SECONDS = 2       # how often system_settings.emergency_shutdown is checked
+ENFORCE_ACCESS_DURING_SESSION = True  # re-check the signed-in user against the server mid-session
+ACCESS_RECHECK_SECONDS = 5       # ...this often (lab closing, group disabled, permission revoked)
+
 # === Required Settings from system_settings table ===
 REQUIRED_SYSTEM_SETTINGS = [
     "grace_period_seconds"

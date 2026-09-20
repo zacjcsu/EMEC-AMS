@@ -1,0 +1,112 @@
+import logging
+import threading
+import time
+from db.azure_sync import get_azure_connection
+from config.constants import (
+    EMERGENCY_POLL_SECONDS, ENFORCE_ACCESS_DURING_SESSION, ACCESS_RECHECK_SECONDS, MACHINE_ID
+)
+
+logger = logging.getLogger("lockout")
+
+
+class LockoutMonitor:
+    """Watches the server for reasons to stop the machine, over one persistent connection.
+
+    * Emergency shutdown: system_settings.emergency_shutdown, written by the dashboard button.
+      While 'true' the relay is locked off (nothing can energise it), `estop_active` is set, and the
+      rest of the app stops sessions and shows the shutdown message.
+    * Access revoked mid-session: while a user is being watched (SessionManager calls watch/unwatch),
+      the server's access_decision_machine() is asked about them every ACCESS_RECHECK_SECONDS. If they
+      no longer have access (lab closed, group disabled, permission revoked) the relay is cut and
+      `revoked_reason` is set for the session loop to end the session.
+
+    If the server cannot be reached the last known state is kept: a dropped network neither starts nor
+    lifts a lockout, and does not end a running session.
+    """
+
+    def __init__(self, relay, machine_id=MACHINE_ID):
+        self.relay = relay
+        self.machine_id = machine_id
+        self.estop_active = False
+        self.revoked_reason = None
+        self._watched = None  # csu_id of the user on the machine
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="lockout-monitor", daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+
+    def watch(self, csu_id):
+        with self._lock:
+            if self._watched != str(csu_id):
+                self.revoked_reason = None
+            self._watched = str(csu_id)
+
+    def unwatch(self):
+        with self._lock:
+            self._watched = None
+            self.revoked_reason = None
+
+    def _set_estop(self, active):
+        if active == self.estop_active:
+            return
+        self.estop_active = active
+        self.relay.set_lockout(active)
+        logger.warning("[LOCKOUT] Emergency shutdown ACTIVE: relay locked off." if active
+                       else "[LOCKOUT] Emergency shutdown lifted.")
+
+    def _check_access(self, conn, csu_id):
+        row = conn.execute(
+            "SELECT allowed, reason FROM access_decision_machine(%s, %s)",
+            (csu_id, self.machine_id)).fetchone()
+        # unknown_machine means a registration problem, not that this user lost access.
+        if row and not row["allowed"] and row["reason"] != "unknown_machine":
+            with self._lock:
+                if self._watched != csu_id:  # session ended or changed while we were asking
+                    return
+                first = self.revoked_reason is None
+                self.revoked_reason = row["reason"]
+            self.relay.turn_off()
+            if first:
+                logger.warning(f"[LOCKOUT] Access revoked for {csu_id} ({row['reason']}): relay off.")
+
+    def _run(self):
+        conn = None
+        failing = False
+        last_access_check = 0.0
+        while not self._stop.is_set():
+            try:
+                if conn is None or conn.closed:
+                    conn = get_azure_connection(timeout=3)
+                    conn.autocommit = True  # no transaction left open between polls
+                row = conn.execute(
+                    "SELECT value FROM system_settings WHERE setting = 'emergency_shutdown'"
+                ).fetchone()
+                self._set_estop(bool(row) and str(row["value"]).strip().lower() == "true")
+
+                with self._lock:
+                    watched = self._watched
+                if (ENFORCE_ACCESS_DURING_SESSION and watched
+                        and time.monotonic() - last_access_check >= ACCESS_RECHECK_SECONDS):
+                    self._check_access(conn, watched)
+                    last_access_check = time.monotonic()
+
+                if failing:
+                    logger.info("[LOCKOUT] Server reachable again.")
+                    failing = False
+            except Exception as e:
+                if not failing:
+                    logger.error(f"[LOCKOUT] Cannot reach server, keeping state "
+                                 f"(estop {'ACTIVE' if self.estop_active else 'clear'}): {e}")
+                    failing = True
+                try:
+                    if conn is not None:
+                        conn.close()
+                except Exception:
+                    pass
+                conn = None
+            self._stop.wait(EMERGENCY_POLL_SECONDS)

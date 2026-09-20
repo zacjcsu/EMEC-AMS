@@ -164,6 +164,20 @@ class LocalDB:
         )
         self.conn.commit()
 
+    def get_open_sessions(self):
+        """Sessions with no end time: normally only the one running now; after a crash, orphans."""
+        self.cursor.execute("SELECT session_id, csu_id, start_time FROM Machine_Usage WHERE end_time IS NULL")
+        return self.cursor.fetchall()
+
+    def close_session_at(self, session_id, end_time):
+        self.cursor.execute("""
+            UPDATE Machine_Usage
+            SET end_time = ?,
+                duration = MAX(0, (strftime('%s', ?) - strftime('%s', start_time)) / 60)
+            WHERE session_id = ?
+        """, (end_time, end_time, session_id))
+        self.conn.commit()
+
     def end_session(self, session_id):
         now = utc_now_str()
         self.cursor.execute("""

@@ -133,38 +133,76 @@ def remote_access_decision(csu_id, machine_id):
         return None
 
 
+_SESSION_COLS = ("session_id, csu_id, machine_id, machine_type, start_time, end_time, duration, card_uid")
+
+
+def _upsert_session(cur_pg, row):
+    """Write a machine_usage row without depending on which unique key the table has: update by session_id,
+    insert if nothing matched. Used for the open row at session start and again for the closed row at the end."""
+    session_id, csu_id, machine_id, machine_type, start_time, end_time, duration, card_uid = row
+    cur_pg.execute(
+        "UPDATE machine_usage SET csu_id = %s, machine_id = %s, machine_type = %s, "
+        "start_time = %s, end_time = %s, duration = %s, card_uid = %s WHERE session_id = %s",
+        (csu_id, machine_id, machine_type, start_time, end_time, duration, card_uid, session_id),
+    )
+    if cur_pg.rowcount == 0:
+        cur_pg.execute(
+            f"INSERT INTO machine_usage ({_SESSION_COLS}) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (session_id, csu_id, machine_id, machine_type, start_time, end_time, duration, card_uid),
+        )
+
+
+def _local_session_row(session_id):
+    conn_local = sqlite3.connect(LOCAL_DB_PATH)
+    try:
+        return conn_local.execute(f"SELECT {_SESSION_COLS} FROM Machine_Usage WHERE session_id = ?", (session_id,)).fetchone()
+    finally:
+        conn_local.close()
+
+
+def push_session_start(session_id):
+    """Write the session to the server the moment it starts, with end_time and duration empty, so the dashboard can
+    show who is on a machine and for how long. The local row stays: sync_session_to_azure() fills in the end later.
+    If the server cannot be reached the end-of-session sync inserts the whole row instead."""
+    try:
+        row = _local_session_row(session_id)
+        if not row:
+            return
+        with get_azure_connection(timeout=3) as conn:
+            with conn.cursor() as cur_pg:
+                _upsert_session(cur_pg, row)
+        logger.info(f"[SYNC] Session {session_id} started on the server (open row).")
+    except Exception as e:
+        logger.error(f"[SYNC] Session start push failed (the end-of-session sync will write it): {e}")
+
+
 def sync_session_to_azure(session_id):
     try:
-        conn_local = sqlite3.connect(LOCAL_DB_PATH)
-        cur = conn_local.cursor()
-        cur.execute("SELECT session_id, csu_id, machine_id, machine_type, start_time, end_time, duration, card_uid FROM Machine_Usage WHERE session_id = ?", (session_id,))
-        row = cur.fetchone()
+        row = _local_session_row(session_id)
         if not row:
-            conn_local.close()
             return
-        session_id, csu_id, machine_id, machine_type, start_time, end_time, duration, card_uid = row
-
         with get_azure_connection() as conn:
             with conn.cursor() as cur_pg:
-                # Upsert without depending on which unique key the table has.
-                cur_pg.execute(
-                    "UPDATE machine_usage SET csu_id = %s, machine_id = %s, machine_type = %s, "
-                    "start_time = %s, end_time = %s, duration = %s, card_uid = %s WHERE session_id = %s",
-                    (csu_id, machine_id, machine_type, start_time, end_time, duration, card_uid, session_id),
-                )
-                if cur_pg.rowcount == 0:
-                    cur_pg.execute(
-                        "INSERT INTO machine_usage (session_id, csu_id, machine_id, machine_type, start_time, end_time, duration, card_uid) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                        (session_id, csu_id, machine_id, machine_type, start_time, end_time, duration, card_uid),
-                    )
+                _upsert_session(cur_pg, row)
 
-        cur.execute("DELETE FROM Machine_Usage WHERE session_id = ?", (session_id,))
+        conn_local = sqlite3.connect(LOCAL_DB_PATH)
+        conn_local.execute("DELETE FROM Machine_Usage WHERE session_id = ?", (session_id,))
         conn_local.commit()
         conn_local.close()
         logger.info(f"[SYNC] Session {session_id} synced and removed locally.")
     except Exception as e:
         logger.error(f"[SYNC] Session sync failed: {e}")
+
+
+def fetch_last_heartbeat(machine_id):
+    """machine.last_heartbeat (naive UTC) for this machine, or None if the server is unreachable or it has none."""
+    try:
+        with get_azure_connection(timeout=3) as conn:
+            row = conn.execute("SELECT last_heartbeat FROM machine WHERE machine_id = %s", (machine_id,)).fetchone()
+        return row["last_heartbeat"] if row else None
+    except Exception as e:
+        logger.warning(f"[SYNC] Could not read the last heartbeat: {e}")
+        return None
 
 
 def push_machine_status(db, machine_id):

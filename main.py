@@ -5,7 +5,7 @@ from utils.startup_check import startup_sequence
 from rfid.reader import RFIDReader
 from rfid.scan_flow import ScanFlow
 from utils.card_activity import CardActivity
-from relay.session_manager import SessionManager
+from relay.session_manager import SessionManager, recover_orphaned_sessions
 from relay.controller import RelayController
 from lcd.lcd import LCD
 from utils.leds import StatusLEDs
@@ -71,6 +71,12 @@ signal.signal(signal.SIGINT, exit_handler)
 signal.signal(signal.SIGTERM, exit_handler)
 
 def main():
+    # Before the heartbeat thread starts: its first beat would replace the previous run's last heartbeat,
+    # which is what an unfinished session is closed at.
+    try:
+        recover_orphaned_sessions(db)
+    except Exception:
+        logger.exception("[MAIN] Could not recover unfinished sessions.")
     lockout.start()
     heartbeat.start()
     activity.start()

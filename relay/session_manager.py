@@ -2,7 +2,11 @@ import time
 import uuid
 import logging
 from config.constants import MACHINE_ID, CARD_GRACE_PERIOD_DEFAULT
-from db.azure_sync import sync_session_to_azure, push_user_status, push_machine_status
+from datetime import datetime
+from db.azure_sync import (
+    sync_session_to_azure, push_session_start, push_user_status, push_machine_status, fetch_last_heartbeat,
+)
+from utils.timeutil import TS_FORMAT
 from config.constants import STATUS_NEUTRAL, STATUS_IN_USE, LCD_LINE_DELAY
 
 logger = logging.getLogger("session")
@@ -59,6 +63,7 @@ class SessionManager:
             self.session_start_time = time.time()
             self.db.mark_user_active(csu_id)
             self.db.insert_session(self.active_session_id, csu_id, MACHINE_ID, card_uid)
+            push_session_start(self.active_session_id)     # the dashboard shows who is on the machine from now
             logger.info(f"[SESSION] Started: {display_name} ({csu_id}), session_id: {self.active_session_id}"
                         + (f", TEMP card {card_uid}" if temp else ""))
         else:
@@ -174,3 +179,27 @@ class SessionManager:
 
         self._reset_session_state()
         self.relay.turn_off()
+
+
+def recover_orphaned_sessions(db):
+    """Close sessions left open by a crash or power loss, so an empty end_time on the server means "running now".
+
+    A normal shutdown closes its session (main.py's exit handler), so any open local row found at startup
+    belongs to a previous run. It is ended at the server's last heartbeat from that run (the heartbeat thread
+    beats about every 30 s while the app is up), or at its start if that is earlier. If the server cannot be
+    reached nothing is changed and the next start tries again.
+    """
+    open_rows = db.get_open_sessions()
+    if not open_rows:
+        return
+    heartbeat = fetch_last_heartbeat(MACHINE_ID)
+    if heartbeat is None:
+        logger.warning(f"[SESSION] {len(open_rows)} unfinished session(s) from a previous run; server unreachable, will retry.")
+        return
+    for row in open_rows:
+        start = datetime.strptime(row["start_time"], TS_FORMAT)
+        end = heartbeat if heartbeat > start else start
+        db.close_session_at(row["session_id"], end.strftime(TS_FORMAT))
+        sync_session_to_azure(row["session_id"])
+        logger.warning(f"[SESSION] Closed unfinished session {row['session_id']} ({row['csu_id']}) at {end} "
+                       f"(last heartbeat of the previous run).")

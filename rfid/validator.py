@@ -8,7 +8,7 @@ from config.constants import STATUS_IN_USE, LCD_LINE_DELAY
 logger = logging.getLogger("validator")
 
 # Refusals whose message stays on the LCD until the card is removed (or access returns).
-HELD_REASONS = ("user_disabled", "group_disabled")
+HELD_REASONS = ("user_disabled", "group_disabled", "outside_hours")
 
 def validate_card(csu_id, uid_num, db, lcd, relay, temp=False, hold_until_removed=None):
     """Access check for a person. `temp` marks a temporary card: uid_num is then None, so no student UID is
@@ -55,6 +55,8 @@ def validate_card(csu_id, uid_num, db, lcd, relay, temp=False, hold_until_remove
         if reason == "user_disabled":
             line1, _, line2 = (via or "").partition("\n")
             line1 = line1 or "User disabled"
+        elif reason == "outside_hours":
+            line1, line2 = "Access Denied", "Outside hours"
         else:
             line1, line2 = "Group disabled", ""
         lcd.display(line1[:16], line2[:16], color="red")

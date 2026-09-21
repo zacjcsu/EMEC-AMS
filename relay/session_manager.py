@@ -7,7 +7,7 @@ from db.server_sync import (
     sync_session_to_server, push_session_start, push_user_status, push_machine_status, fetch_last_heartbeat,
 )
 from utils.timeutil import TS_FORMAT
-from config.constants import STATUS_NEUTRAL, STATUS_IN_USE, LCD_LINE_DELAY
+from config.constants import STATUS_NEUTRAL, STATUS_IN_USE, LCD_LINE_DELAY, CARD_POLL_INTERVAL
 
 logger = logging.getLogger("session")
 
@@ -105,8 +105,21 @@ class SessionManager:
             self._show(line1, line2, color="red")
             self.force_end_session(quiet=True)
             return
+        if reason == "outside_hours":
+            # "Lab closed / Session ended" stays up; wait_for_card_removal holds it until the card is removed.
+            self._show(line1, line2, color="red")
+            self.force_end_session(quiet=True)
+            return
         self._show(line1, line2, color="red", delay=LCD_LINE_DELAY)
         self.force_end_session()
+
+    def _hold_until_card_gone(self, reader, misses_to_remove=3):
+        """Leave the LCD alone until the reader has seen no card for a few polls in a row (a single missed
+        read is common and does not mean the card was removed)."""
+        misses = 0
+        while misses < misses_to_remove:
+            misses = misses + 1 if reader.read_card_ex() is None else 0
+            time.sleep(CARD_POLL_INTERVAL)
 
     def _classify(self, scan):
         """'same' if `scan` is the card that started this session, 'other' if it is a different card,
@@ -131,6 +144,8 @@ class SessionManager:
             reason = self._lockout_reason()
             if reason:
                 self._end_for_lockout(reason)
+                if reason == "outside_hours":
+                    self._hold_until_card_gone(reader)
                 return reason
             state = self._classify(reader.read_card_ex())
             if state == "same":
@@ -155,6 +170,8 @@ class SessionManager:
             reason = self._lockout_reason()
             if reason:
                 self._end_for_lockout(reason)
+                if reason == "outside_hours":
+                    self._hold_until_card_gone(reader)
                 return reason
             remaining = int(end_time - time.time())
             self.lcd.display("Remove detected", f"Reinsert: {remaining}s", color="yellow")

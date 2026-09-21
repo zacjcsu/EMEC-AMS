@@ -138,12 +138,15 @@ _SESSION_COLS = ("session_id, csu_id, machine_id, machine_type, start_time, end_
 
 def _upsert_session(cur_pg, row):
     """Write a machine_usage row without depending on which unique key the table has: update by session_id,
-    insert if nothing matched. Used for the open row at session start and again for the closed row at the end."""
+    insert if nothing matched. Used for the open row at session start and again for the closed row at the end.
+
+    The UPDATE only touches end_time and duration, because that is all the Pi's database role may update
+    (it may INSERT a full row, but not rewrite one). Everything else is fixed when the row is inserted.
+    """
     session_id, csu_id, machine_id, machine_type, start_time, end_time, duration, card_uid = row
     cur_pg.execute(
-        "UPDATE machine_usage SET csu_id = %s, machine_id = %s, machine_type = %s, "
-        "start_time = %s, end_time = %s, duration = %s, card_uid = %s WHERE session_id = %s",
-        (csu_id, machine_id, machine_type, start_time, end_time, duration, card_uid, session_id),
+        "UPDATE machine_usage SET end_time = %s, duration = %s WHERE session_id = %s",
+        (end_time, duration, session_id),
     )
     if cur_pg.rowcount == 0:
         cur_pg.execute(
@@ -244,8 +247,8 @@ def push_user_status(db, csu_id):
     try:
         with get_server_connection() as conn:
             conn.execute(
-                "UPDATE users SET is_active = %s, last_used = %s WHERE csu_id = %s",
-                (bool(user["is_active"]), user["last_used"], str(csu_id)),
+                "UPDATE users SET last_used = %s WHERE csu_id = %s",
+                (user["last_used"], str(csu_id)),
             )
         logger.info(f"[SYNC] User status pushed for {csu_id}")
     except Exception as e:
@@ -267,8 +270,8 @@ def push_user_update(csu_id):
 
         with get_server_connection() as conn:
             conn.execute(
-                "UPDATE users SET uid = %s, name = %s, last_used = %s, is_active = %s WHERE csu_id = %s",
-                (row["uid"], row["name"], row["last_used"], bool(row["is_active"]), str(row["csu_id"])),
+                "UPDATE users SET uid = %s WHERE csu_id = %s",
+                (row["uid"], str(row["csu_id"])),
             )
         logger.info(f"[SYNC] UID and info pushed for {csu_id}")
     except Exception as e:

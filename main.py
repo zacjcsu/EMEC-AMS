@@ -80,9 +80,12 @@ def main():
     lockout.start()
     heartbeat.start()
     activity.start()
+    skip_startup = False   # set after a session ended by a disabled user, to keep their message on the LCD
     while True:
         try:
-            if not startup_sequence(lcd, db):
+            if skip_startup:
+                skip_startup = False
+            elif not startup_sequence(lcd, db):
                 time.sleep(5)
                 continue
 
@@ -114,8 +117,10 @@ def main():
             session_mgr.start_session(started.csu_id, started.display_name, started.card_uid, started.temp)
             # The grace period only applies when the card was removed. If the server or a new card already
             # ended the session (lost card, revoke, expiry, emergency stop), there is nothing to resume.
-            if session_mgr.wait_for_card_removal(reader) == "removed":
-                session_mgr.handle_grace_period(reader)
+            ended = session_mgr.wait_for_card_removal(reader)
+            if ended == "removed":
+                ended = session_mgr.handle_grace_period(reader)
+            skip_startup = ended == "user_disabled"
         except Exception:
             logger.exception("[MAIN] Unhandled error in main loop; recovering.")
             relay.turn_off()

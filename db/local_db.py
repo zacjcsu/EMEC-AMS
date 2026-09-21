@@ -79,8 +79,13 @@ class LocalDB:
         machine_type = machine["machine_type"]
         c = self.cursor
 
-        c.execute("SELECT 1 FROM Users WHERE csu_id = ?", (csu_id,))
-        user_exists = c.fetchone() is not None
+        c.execute("SELECT disabled_at, disabled_line1, disabled_line2 FROM Users WHERE csu_id = ?", (csu_id,))
+        user_row = c.fetchone()
+        user_exists = user_row is not None
+        disabled_message = None
+        if user_row and user_row["disabled_at"]:
+            disabled_message = "\n".join(
+                filter(None, [user_row["disabled_line1"] or "User disabled", user_row["disabled_line2"]]))
         c.execute(
             "SELECT 1 FROM User_Groups ug JOIN Groups g ON g.group_name = ug.group_name "
             "WHERE ug.csu_id = ? AND g.enabled = 0", (csu_id,))
@@ -108,7 +113,7 @@ class LocalDB:
                 windows.append((name, access_rule.parse_days(days), start_t, end_t))
 
         return access_rule.decide(
-            user_exists=user_exists, in_disabled_group=in_disabled_group,
+            user_exists=user_exists, user_disabled_message=disabled_message, in_disabled_group=in_disabled_group,
             has_permission=has_permission, lab_open=lab_open, lab_close=lab_close,
             lab_days=lab_days, level_windows=windows, local=local)
 

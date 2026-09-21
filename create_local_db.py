@@ -14,7 +14,10 @@ CREATE TABLE IF NOT EXISTS Users (
     uid TEXT,
     name TEXT,
     last_used TEXT,
-    is_active INTEGER DEFAULT 0
+    is_active INTEGER DEFAULT 0,
+    disabled_at TEXT,
+    disabled_line1 TEXT,
+    disabled_line2 TEXT
 );
 
 -- USER ACCESS 
@@ -125,6 +128,10 @@ def create_local_db():
         cur.execute("ALTER TABLE Access_Levels ADD COLUMN enabled INTEGER DEFAULT 1")
     # Replaced by Category_Permissions when permissions moved from machines to categories.
     cur.execute("DROP TABLE IF EXISTS Machine_Permissions")
+    user_cols = [r[1] for r in cur.execute("PRAGMA table_info(Users)")]
+    for col in ("disabled_at", "disabled_line1", "disabled_line2"):
+        if col not in user_cols:
+            cur.execute(f"ALTER TABLE Users ADD COLUMN {col} TEXT")
     usage_cols = [r[1] for r in cur.execute("PRAGMA table_info(Machine_Usage)")]
     if "card_uid" not in usage_cols:
         cur.execute("ALTER TABLE Machine_Usage ADD COLUMN card_uid TEXT")

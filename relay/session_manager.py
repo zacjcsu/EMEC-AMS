@@ -90,7 +90,18 @@ class SessionManager:
 
     def _end_for_lockout(self, reason):
         logger.warning(f"[SESSION] Ending session: {reason}.")
-        line1, line2 = REVOKED_MESSAGES.get(reason, ("Access revoked", str(reason)))
+        if reason == "user_disabled":
+            # The dashboard's own two-line message: line 1, a newline, an optional line 2.
+            line1, _, line2 = (self.lockout.revoked_via or "").partition("\n")
+            line1, line2 = line1[:16] or "User disabled", line2[:16]
+        else:
+            line1, line2 = REVOKED_MESSAGES.get(reason, ("Access revoked", str(reason)))
+        if reason == "user_disabled":
+            # The message stays up: the next scan of the card still on the reader shows and holds it, so skip
+            # the delay, the "Session ended" screen and the startup checks that would flash over it.
+            self._show(line1, line2, color="red")
+            self.force_end_session(quiet=True)
+            return
         self._show(line1, line2, color="red", delay=LCD_LINE_DELAY)
         self.force_end_session()
 
@@ -160,7 +171,7 @@ class SessionManager:
         logger.info("[SESSION] Ended after grace period.")
         return "timeout"
 
-    def force_end_session(self):
+    def force_end_session(self, quiet=False):
         if not self.active_session_id:
             return
 
@@ -175,7 +186,8 @@ class SessionManager:
         sync_session_to_server(self.active_session_id)
         logger.info(f"[SESSION] Ended: {self.display_name} ({self.active_csu_id}), duration: {duration_min} min")
 
-        self._show("Session", "ended", color="red", delay=1)
+        if not quiet:
+            self._show("Session", "ended", color="red", delay=1)
 
         self._reset_session_state()
         self.relay.turn_off()

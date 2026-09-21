@@ -29,6 +29,7 @@ class LockoutMonitor:
         self.machine_id = machine_id
         self.estop_active = False
         self.revoked_reason = None
+        self.revoked_via = None  # the server's `via` for that reason (a disabled user's two-line message)
         self._watched = None  # csu_id of the user on the machine
         self._watched_card = None  # UID of the temporary card they signed in with, if any
         self._lock = threading.Lock()
@@ -47,6 +48,7 @@ class LockoutMonitor:
         with self._lock:
             if self._watched != str(csu_id) or self._watched_card != temp_card_uid:
                 self.revoked_reason = None
+                self.revoked_via = None
             self._watched = str(csu_id)
             self._watched_card = temp_card_uid
 
@@ -55,6 +57,7 @@ class LockoutMonitor:
             self._watched = None
             self._watched_card = None
             self.revoked_reason = None
+            self.revoked_via = None
 
     def _set_estop(self, active):
         if active == self.estop_active:
@@ -73,7 +76,7 @@ class LockoutMonitor:
                 row = {"allowed": False, "reason": card["reason"]}
         if row is None:
             row = conn.execute(
-                "SELECT allowed, reason FROM access_decision_machine(%s, %s)",
+                "SELECT allowed, reason, via FROM access_decision_machine(%s, %s)",
                 (csu_id, self.machine_id)).fetchone()
         # unknown_machine means a registration problem, not that this user lost access.
         if row and not row["allowed"] and row["reason"] != "unknown_machine":
@@ -82,6 +85,7 @@ class LockoutMonitor:
                     return
                 first = self.revoked_reason is None
                 self.revoked_reason = row["reason"]
+                self.revoked_via = row.get("via")
             self.relay.turn_off()
             if first:
                 logger.warning(f"[LOCKOUT] Access revoked for {csu_id} ({row['reason']}): relay off.")

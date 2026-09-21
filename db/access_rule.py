@@ -2,7 +2,7 @@
 repo's db/PI_ACCESS_CHECK.md). Pure functions: no database or clock access, so they can be tested
 against the server's reference cases.
 
-Rule order, first match wins: unknown_user, group_disabled, no_permission, lab_hours, level, outside_hours.
+Rule order, first match wins: unknown_user, user_disabled, group_disabled, no_permission, lab_hours, level, outside_hours.
 """
 from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
@@ -57,15 +57,19 @@ def local_now(tz_name, at=None):
     return at.astimezone(zone).replace(tzinfo=None)
 
 
-def decide(*, user_exists, in_disabled_group, has_permission, lab_open, lab_close, lab_days,
+def decide(*, user_exists, user_disabled_message=None, in_disabled_group, has_permission, lab_open, lab_close, lab_days,
            level_windows, local):
     """Return (allowed, reason, via).
+
+    user_disabled_message: None if the user is enabled, else the "line1\nline2" text shown on the LCD.
 
     level_windows: iterable of (level_name, days_set, start_time, end_time) for the user's ENABLED
     levels only. A level with no windows simply contributes nothing.
     """
     if not user_exists:
         return False, "unknown_user", None
+    if user_disabled_message is not None:
+        return False, "user_disabled", user_disabled_message
     if in_disabled_group:
         return False, "group_disabled", None
     if not has_permission:

@@ -27,6 +27,7 @@ REJECT_TEXT = {
 }
 
 LOOKUP_TTL = 2.0      # seconds a lookup result is reused for a card that stays on the reader
+RECHECK_SECONDS = 2.0   # how often a held "user disabled" message asks the server if the user was re-enabled
 MISSES_TO_REMOVE = 3  # polls with no card before it counts as removed (debounce)
 
 
@@ -63,6 +64,21 @@ class ScanFlow:
             self._reset_arrival(None)
             self.activity.set_present(None)
 
+    def _hold_until_removed(self, recheck=None):
+        """Block until the card has left the reader (debounced), leaving whatever is on the LCD untouched.
+        If `recheck` is given it is called every RECHECK_SECONDS; when it returns True, stop and return True
+        (the caller carries on with the card still there). Returns False when the card was removed."""
+        misses = 0
+        last = time.monotonic()
+        while misses < MISSES_TO_REMOVE:
+            misses = misses + 1 if self.reader.read_card_ex() is None else 0
+            time.sleep(0.3)
+            if recheck and misses == 0 and time.monotonic() - last >= RECHECK_SECONDS:
+                last = time.monotonic()
+                if recheck():
+                    return True
+        return False
+
     def process(self, scan):
         """Handle a card on the reader. Returns a SessionStart if the card started a session, else None
         (having shown a message and/or reported the card to the dashboard)."""
@@ -71,7 +87,8 @@ class ScanFlow:
             self._reset_arrival(scan.uid_hex)
 
         if scan.csu_id is not None:                      # a student card: the normal path, unchanged
-            csu_id, name = validate_card(scan.csu_id, scan.uid_num, self.db, self.lcd, self.relay)
+            csu_id, name = validate_card(scan.csu_id, scan.uid_num, self.db, self.lcd, self.relay,
+                                         hold_until_removed=self._hold_until_removed)
             if csu_id:
                 self.activity.set_present(None)
                 return SessionStart(csu_id, name, scan.uid_hex, False)
@@ -159,7 +176,8 @@ class ScanFlow:
             self._reject(*REJECT_TEXT.get(v["reason"], ("Card not valid", "See staff")))
             return None
 
-        csu_id, name = validate_card(v["csu_id"], None, self.db, self.lcd, self.relay, temp=True)
+        csu_id, name = validate_card(v["csu_id"], None, self.db, self.lcd, self.relay, temp=True,
+                                     hold_until_removed=self._hold_until_removed)
         if not csu_id:
             self._denied = True       # the person is not allowed on this machine right now
             self.lcd.display(*LCD_MESSAGES["startup_next"])

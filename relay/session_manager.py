@@ -3,8 +3,8 @@ import uuid
 import logging
 from config.constants import MACHINE_ID, CARD_GRACE_PERIOD_DEFAULT
 from datetime import datetime
-from db.azure_sync import (
-    sync_session_to_azure, push_session_start, push_user_status, push_machine_status, fetch_last_heartbeat,
+from db.server_sync import (
+    sync_session_to_server, push_session_start, push_user_status, push_machine_status, fetch_last_heartbeat,
 )
 from utils.timeutil import TS_FORMAT
 from config.constants import STATUS_NEUTRAL, STATUS_IN_USE, LCD_LINE_DELAY
@@ -172,7 +172,7 @@ class SessionManager:
         self.db.mark_user_inactive(self.active_csu_id)
         self._sync_machine_status(STATUS_NEUTRAL, self.active_csu_id)
 
-        sync_session_to_azure(self.active_session_id)
+        sync_session_to_server(self.active_session_id)
         logger.info(f"[SESSION] Ended: {self.display_name} ({self.active_csu_id}), duration: {duration_min} min")
 
         self._show("Session", "ended", color="red", delay=1)
@@ -200,6 +200,6 @@ def recover_orphaned_sessions(db):
         start = datetime.strptime(row["start_time"], TS_FORMAT)
         end = heartbeat if heartbeat > start else start
         db.close_session_at(row["session_id"], end.strftime(TS_FORMAT))
-        sync_session_to_azure(row["session_id"])
+        sync_session_to_server(row["session_id"])
         logger.warning(f"[SESSION] Closed unfinished session {row['session_id']} ({row['csu_id']}) at {end} "
                        f"(last heartbeat of the previous run).")

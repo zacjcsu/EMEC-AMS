@@ -14,7 +14,7 @@ from config.constants import (
     DB_ENV,
     DEVICE_ID as device_id
 )
-from db.azure_sync import sync_local_from_azure, push_machine_status
+from db.server_sync import sync_local_from_server, push_machine_status
 
 
 logger = logging.getLogger("startup")
@@ -57,7 +57,7 @@ def startup_sequence(lcd, db):
 
     try:
         lcd.display("Syncing online")
-        sync_local_from_azure()
+        sync_local_from_server()
         logger.info("[PASS] Server sync complete.")
     except Exception as e:
         lcd.display("\n".join(LCD_MESSAGES["db_error"]), color="red")

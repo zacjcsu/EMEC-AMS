@@ -1,6 +1,6 @@
 import time
 import logging
-from db.azure_sync import sync_local_from_azure, push_access_requests, push_user_update, remote_access_decision
+from db.server_sync import sync_local_from_server, push_access_requests, push_user_update, remote_access_decision
 from config.constants import MACHINE_ID
 from utils.startup_check import startup_sequence
 from config.constants import STATUS_IN_USE, LCD_LINE_DELAY
@@ -24,7 +24,7 @@ def validate_card(csu_id, uid_num, db, lcd, relay, temp=False):
     if allowed and not user:
         # Approved on the dashboard since the last sync; pull it so the name and UID are known.
         try:
-            sync_local_from_azure()
+            sync_local_from_server()
             user = db.get_user(csu_id)
         except Exception as e:
             logger.error(f"[VALIDATOR] Sync for new user failed: {e}")

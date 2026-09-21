@@ -1,7 +1,7 @@
 import logging
 import threading
 import time
-from db.azure_sync import get_azure_connection
+from db.server_sync import get_server_connection
 from config.constants import (
     EMERGENCY_POLL_SECONDS, ENFORCE_ACCESS_DURING_SESSION, ACCESS_RECHECK_SECONDS, MACHINE_ID
 )
@@ -93,7 +93,7 @@ class LockoutMonitor:
         while not self._stop.is_set():
             try:
                 if conn is None or conn.closed:
-                    conn = get_azure_connection(timeout=3)
+                    conn = get_server_connection(timeout=3)
                     conn.autocommit = True  # no transaction left open between polls
                 row = conn.execute(
                     "SELECT value FROM system_settings WHERE setting = 'emergency_shutdown'"

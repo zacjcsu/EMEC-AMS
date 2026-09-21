@@ -211,7 +211,7 @@ MACHINE_ID="${MACHINE_ID:-}"; MACHINE_NAME="${MACHINE_NAME:-}"; MACHINE_TYPE="${
 ok "${MACHINE_ID} / ${MACHINE_NAME} / ${MACHINE_TYPE}"
 
 # ---------------------------------------------------------------------------
-# 1b. Azure credentials
+# 1b. Database credentials
 # ---------------------------------------------------------------------------
 
 step "Database credentials (written to .env)"

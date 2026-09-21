@@ -8,7 +8,7 @@ Cards that did not start a session are reported to the dashboard so a temp card 
 import logging
 import time
 from config.constants import LCD_LINE_DELAY, LCD_MESSAGES
-from db.azure_sync import temp_card_lookup, temp_card_verify, temp_card_finish
+from db.server_sync import temp_card_lookup, temp_card_verify, temp_card_finish
 from rfid.card_io import CardIO, CardLost, data_block
 from rfid.temp_writer import program_card
 from rfid.validator import validate_card

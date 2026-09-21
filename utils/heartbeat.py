@@ -3,7 +3,7 @@ import os
 import signal
 import threading
 import time
-from db.azure_sync import get_azure_connection
+from db.server_sync import get_server_connection
 from config.constants import HEARTBEAT_PUSH_SECONDS, RESTART_POLL_SECONDS
 
 logger = logging.getLogger("heartbeat")
@@ -50,7 +50,7 @@ class HeartbeatMonitor:
         while not self._stop.is_set():
             try:
                 if conn is None or conn.closed:
-                    conn = get_azure_connection(timeout=3)
+                    conn = get_server_connection(timeout=3)
                     conn.autocommit = True
                     next_schema_check = 0.0
                     if self._started_at is None:

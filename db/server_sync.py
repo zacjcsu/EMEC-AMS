@@ -1,6 +1,5 @@
 """Sync between the local SQLite cache and the dashboard's PostgreSQL database.
 
-(The module keeps its old name; the Azure/MySQL backend it was written for is gone.)
 All timestamps written to the server are naive UTC strings, as the server stores them.
 """
 import sqlite3
@@ -10,10 +9,10 @@ from psycopg.rows import dict_row
 from config.constants import DB_ENV, LOCAL_DB_PATH, MACHINE_ID
 from utils.timeutil import utc_now_str
 
-logger = logging.getLogger("azure_sync")
+logger = logging.getLogger("server_sync")
 
 
-def get_azure_connection(timeout=10):
+def get_server_connection(timeout=10):
     return psycopg.connect(
         host=DB_ENV["host"],
         port=DB_ENV["port"],
@@ -84,11 +83,11 @@ PULL_QUERIES = {
 }
 
 
-def sync_local_from_azure():
+def sync_local_from_server():
     """Replace the local cache tables with the server's. All or nothing: raises on any failure so
     the caller never runs on a half-updated permission set."""
     pulled = {}
-    conn_pg = get_azure_connection()
+    conn_pg = get_server_connection()
     try:
         # One snapshot, so the tables are consistent with each other.
         conn_pg.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
@@ -122,7 +121,7 @@ def remote_access_decision(csu_id, machine_id):
     on the dashboard applies to the very next scan. Returns None if the server can't be reached;
     the caller then falls back to the local cache."""
     try:
-        with get_azure_connection(timeout=3) as conn:
+        with get_server_connection(timeout=3) as conn:
             row = conn.execute(
                 "SELECT allowed, reason, via FROM access_decision_machine(%s, %s)",
                 (str(csu_id), machine_id),
@@ -162,13 +161,13 @@ def _local_session_row(session_id):
 
 def push_session_start(session_id):
     """Write the session to the server the moment it starts, with end_time and duration empty, so the dashboard can
-    show who is on a machine and for how long. The local row stays: sync_session_to_azure() fills in the end later.
+    show who is on a machine and for how long. The local row stays: sync_session_to_server() fills in the end later.
     If the server cannot be reached the end-of-session sync inserts the whole row instead."""
     try:
         row = _local_session_row(session_id)
         if not row:
             return
-        with get_azure_connection(timeout=3) as conn:
+        with get_server_connection(timeout=3) as conn:
             with conn.cursor() as cur_pg:
                 _upsert_session(cur_pg, row)
         logger.info(f"[SYNC] Session {session_id} started on the server (open row).")
@@ -176,12 +175,12 @@ def push_session_start(session_id):
         logger.error(f"[SYNC] Session start push failed (the end-of-session sync will write it): {e}")
 
 
-def sync_session_to_azure(session_id):
+def sync_session_to_server(session_id):
     try:
         row = _local_session_row(session_id)
         if not row:
             return
-        with get_azure_connection() as conn:
+        with get_server_connection() as conn:
             with conn.cursor() as cur_pg:
                 _upsert_session(cur_pg, row)
 
@@ -197,7 +196,7 @@ def sync_session_to_azure(session_id):
 def fetch_last_heartbeat(machine_id):
     """machine.last_heartbeat (naive UTC) for this machine, or None if the server is unreachable or it has none."""
     try:
-        with get_azure_connection(timeout=3) as conn:
+        with get_server_connection(timeout=3) as conn:
             row = conn.execute("SELECT last_heartbeat FROM machine WHERE machine_id = %s", (machine_id,)).fetchone()
         return row["last_heartbeat"] if row else None
     except Exception as e:
@@ -214,7 +213,7 @@ def push_machine_status(db, machine_id):
     try:
         device_ip = machine["device_ip"]
         device_id = machine["device_id"]
-        with get_azure_connection() as conn:
+        with get_server_connection() as conn:
             with conn.cursor() as cur:
                 # The dashboard owns name and category, so an existing row only gets status fields.
                 cur.execute(
@@ -242,7 +241,7 @@ def push_user_status(db, csu_id):
         return
 
     try:
-        with get_azure_connection() as conn:
+        with get_server_connection() as conn:
             conn.execute(
                 "UPDATE users SET is_active = %s, last_used = %s WHERE csu_id = %s",
                 (bool(user["is_active"]), user["last_used"], str(csu_id)),
@@ -265,7 +264,7 @@ def push_user_update(csu_id):
             logger.warning(f"[SYNC] No local user found with CSU ID {csu_id}")
             return
 
-        with get_azure_connection() as conn:
+        with get_server_connection() as conn:
             conn.execute(
                 "UPDATE users SET uid = %s, name = %s, last_used = %s, is_active = %s WHERE csu_id = %s",
                 (row["uid"], row["name"], row["last_used"], bool(row["is_active"]), str(row["csu_id"])),
@@ -289,7 +288,7 @@ def push_access_requests():
         if not requests:
             return
 
-        with get_azure_connection() as conn:
+        with get_server_connection() as conn:
             with conn.cursor() as cur_pg:
                 for uid, csu_id, machine_id, machine_type, requested_on in requests:
                     cur_pg.execute(
@@ -312,7 +311,7 @@ def push_access_requests():
 def _with_conn(conn, fn):
     if conn is not None:
         return fn(conn)
-    with get_azure_connection(timeout=3) as c:
+    with get_server_connection(timeout=3) as c:
         return fn(c)
 
 

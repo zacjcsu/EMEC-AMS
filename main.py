@@ -17,7 +17,7 @@ import signal
 import sys
 from db.local_db import LocalDB
 from config.constants import CARD_POLL_INTERVAL, MACHINE_ID, STATUS_OFFLINE
-from db.azure_sync import push_machine_status
+from db.server_sync import push_machine_status
 import logging
 from logging.handlers import TimedRotatingFileHandler
 import os

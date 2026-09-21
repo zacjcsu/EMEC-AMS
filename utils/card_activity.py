@@ -1,8 +1,8 @@
 import logging
 import threading
 import time
-from db.azure_sync import (
-    get_azure_connection, report_card_present, report_card_removed, temp_card_claim_job,
+from db.server_sync import (
+    get_server_connection, report_card_present, report_card_removed, temp_card_claim_job,
 )
 from config.constants import MACHINE_ID, CARD_REPORT_SECONDS, CARD_REPORT_MAX_AGE
 
@@ -63,7 +63,7 @@ class CardActivity:
             try:
                 if live or self._reported:
                     if conn is None or conn.closed:
-                        conn = get_azure_connection(timeout=3)
+                        conn = get_server_connection(timeout=3)
                         conn.autocommit = True
                 if live:
                     if now - last_report >= CARD_REPORT_SECONDS:

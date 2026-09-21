@@ -15,7 +15,7 @@ logger = logging.getLogger("session")
 REVOKED_MESSAGES = {
     "estop": ("EMERGENCY", "SHUTDOWN"),
     "outside_hours": ("Lab closed", "Session ended"),
-    "group_disabled": ("Access revoked", "Account locked"),
+    "group_disabled": ("Group disabled", ""),
     "no_permission": ("Access revoked", "No permission"),
     "unknown_user": ("Access revoked", "Unknown user"),
     # temporary cards
@@ -27,6 +27,9 @@ REVOKED_MESSAGES = {
     "unknown_card": ("Card not valid", "Session ended"),
     "not_temporary": ("Card not valid", "Session ended"),
 }
+
+# Reasons whose message stays on screen: the next scan of the card still on the reader shows and holds it.
+QUIET_END_REASONS = ("user_disabled", "group_disabled")
 
 class SessionManager:
     def __init__(self, db, lcd, relay, lockout=None):
@@ -96,7 +99,7 @@ class SessionManager:
             line1, line2 = line1[:16] or "User disabled", line2[:16]
         else:
             line1, line2 = REVOKED_MESSAGES.get(reason, ("Access revoked", str(reason)))
-        if reason == "user_disabled":
+        if reason in QUIET_END_REASONS:
             # The message stays up: the next scan of the card still on the reader shows and holds it, so skip
             # the delay, the "Session ended" screen and the startup checks that would flash over it.
             self._show(line1, line2, color="red")

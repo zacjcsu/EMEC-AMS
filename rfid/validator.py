@@ -7,6 +7,9 @@ from config.constants import STATUS_IN_USE, LCD_LINE_DELAY
 
 logger = logging.getLogger("validator")
 
+# Refusals whose message stays on the LCD until the card is removed (or access returns).
+HELD_REASONS = ("user_disabled", "group_disabled")
+
 def validate_card(csu_id, uid_num, db, lcd, relay, temp=False, hold_until_removed=None):
     """Access check for a person. `temp` marks a temporary card: uid_num is then None, so no student UID is
     recorded against the user or their access request. `hold_until_removed(recheck)`, if given, is called
@@ -47,14 +50,18 @@ def validate_card(csu_id, uid_num, db, lcd, relay, temp=False, hold_until_remove
         startup_sequence(lcd, db)
         return None, None
 
-    if reason == "user_disabled":
-        # `via` carries the dashboard's message: line 1, a newline, then an optional line 2.
-        line1, _, line2 = (via or "").partition("\n")
-        lcd.display(line1[:16] or "User disabled", line2[:16], color="red")
-        logger.warning(f"[ACCESS] Denied: {csu_id} (user_disabled: {via!r})")
+    if reason in HELD_REASONS:
+        # user_disabled: `via` carries the dashboard's message, line 1, a newline, then an optional line 2.
+        if reason == "user_disabled":
+            line1, _, line2 = (via or "").partition("\n")
+            line1 = line1 or "User disabled"
+        else:
+            line1, line2 = "Group disabled", ""
+        lcd.display(line1[:16], line2[:16], color="red")
+        logger.warning(f"[ACCESS] Denied: {csu_id} ({reason}: {via!r})")
         restored = False
         if hold_until_removed:
-            # Keep the message up while the card is on the reader, asking the server whether the user was re-enabled.
+            # Keep the message up while the card is on the reader, asking the server whether access came back.
             def recheck():
                 d = remote_access_decision(csu_id, MACHINE_ID)
                 return bool(d and d[0])
@@ -63,12 +70,12 @@ def validate_card(csu_id, uid_num, db, lcd, relay, temp=False, hold_until_remove
             time.sleep(LCD_LINE_DELAY)
         if not restored:
             return None, None
-        logger.info(f"[ACCESS] {csu_id} re-enabled with the card still present")
+        logger.info(f"[ACCESS] {csu_id} regained access with the card still present")
         allowed = True           # carry on to the grant below
 
     if not allowed:
-        # group_disabled, outside_hours, unknown_machine
-        line2 = {"group_disabled": "Account locked", "outside_hours": "Outside hours"}.get(reason, "Contact admin")
+        # outside_hours, unknown_machine
+        line2 = {"outside_hours": "Outside hours"}.get(reason, "Contact admin")
         lcd.display("Access Denied", line2, color="red")
         logger.warning(f"[ACCESS] Denied: {csu_id} ({reason})")
         time.sleep(LCD_LINE_DELAY)

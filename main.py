@@ -5,7 +5,7 @@ from utils.startup_check import startup_sequence
 from rfid.reader import RFIDReader
 from rfid.scan_flow import ScanFlow
 from utils.card_activity import CardActivity
-from relay.session_manager import SessionManager, recover_orphaned_sessions
+from relay.session_manager import SessionManager, recover_orphaned_sessions, QUIET_END_REASONS
 from relay.controller import RelayController
 from lcd.lcd import LCD
 from utils.leds import StatusLEDs
@@ -120,7 +120,7 @@ def main():
             ended = session_mgr.wait_for_card_removal(reader)
             if ended == "removed":
                 ended = session_mgr.handle_grace_period(reader)
-            skip_startup = ended == "user_disabled"
+            skip_startup = ended in QUIET_END_REASONS
         except Exception:
             logger.exception("[MAIN] Unhandled error in main loop; recovering.")
             relay.turn_off()

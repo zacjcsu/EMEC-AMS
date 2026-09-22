@@ -3,7 +3,8 @@ import threading
 import time
 from db.server_sync import get_server_connection
 from config.constants import (
-    EMERGENCY_POLL_SECONDS, ENFORCE_ACCESS_DURING_SESSION, ACCESS_RECHECK_SECONDS, MACHINE_ID
+    EMERGENCY_POLL_SECONDS, ENFORCE_ACCESS_DURING_SESSION, ACCESS_RECHECK_SECONDS, MACHINE_ID,
+    STATUS_MAINTENANCE,
 )
 
 logger = logging.getLogger("lockout")
@@ -15,6 +16,10 @@ class LockoutMonitor:
     * Emergency shutdown: system_settings.emergency_shutdown, written by the dashboard button.
       While 'true' the relay is locked off (nothing can energise it), `estop_active` is set, and the
       rest of the app stops sessions and shows the shutdown message.
+    * Maintenance: this machine's own machine.machine_status, set from the dashboard's "Set Maintenance"
+      button. While it reads 'maintenance' the relay is locked off, `maintenance_active` is set, and the
+      rest of the app blocks new scans and ends a running session, the same as an emergency shutdown but
+      for one machine instead of the whole lab.
     * Access revoked mid-session: while a user is being watched (SessionManager calls watch/unwatch),
       the server's access_decision_machine() is asked about them every ACCESS_RECHECK_SECONDS. If they
       no longer have access (lab closed, group disabled, permission revoked) the relay is cut and
@@ -28,6 +33,7 @@ class LockoutMonitor:
         self.relay = relay
         self.machine_id = machine_id
         self.estop_active = False
+        self.maintenance_active = False
         self.revoked_reason = None
         self.revoked_via = None  # the server's `via` for that reason (a disabled user's two-line message)
         self._watched = None  # csu_id of the user on the machine
@@ -59,13 +65,24 @@ class LockoutMonitor:
             self.revoked_reason = None
             self.revoked_via = None
 
+    def _relay_should_lock(self):
+        return self.estop_active or self.maintenance_active
+
     def _set_estop(self, active):
         if active == self.estop_active:
             return
         self.estop_active = active
-        self.relay.set_lockout(active)
+        self.relay.set_lockout(self._relay_should_lock())
         logger.warning("[LOCKOUT] Emergency shutdown ACTIVE: relay locked off." if active
                        else "[LOCKOUT] Emergency shutdown lifted.")
+
+    def _set_maintenance(self, active):
+        if active == self.maintenance_active:
+            return
+        self.maintenance_active = active
+        self.relay.set_lockout(self._relay_should_lock())
+        logger.warning(f"[LOCKOUT] {self.machine_id} set to maintenance: relay locked off." if active
+                       else f"[LOCKOUT] {self.machine_id} taken out of maintenance.")
 
     def _check_access(self, conn, csu_id, temp_card_uid=None):
         row = None
@@ -104,6 +121,11 @@ class LockoutMonitor:
                 ).fetchone()
                 self._set_estop(bool(row) and str(row["value"]).strip().lower() == "true")
 
+                mrow = conn.execute(
+                    "SELECT machine_status FROM machine WHERE machine_id = %s", (self.machine_id,)
+                ).fetchone()
+                self._set_maintenance(bool(mrow) and mrow["machine_status"] == STATUS_MAINTENANCE)
+
                 with self._lock:
                     watched, watched_card = self._watched, self._watched_card
                 if (ENFORCE_ACCESS_DURING_SESSION and watched
@@ -117,7 +139,8 @@ class LockoutMonitor:
             except Exception as e:
                 if not failing:
                     logger.error(f"[LOCKOUT] Cannot reach server, keeping state "
-                                 f"(estop {'ACTIVE' if self.estop_active else 'clear'}): {e}")
+                                 f"(estop {'ACTIVE' if self.estop_active else 'clear'}, "
+                                 f"maintenance {'ACTIVE' if self.maintenance_active else 'clear'}): {e}")
                     failing = True
                 try:
                     if conn is not None:

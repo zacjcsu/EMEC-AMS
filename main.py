@@ -60,7 +60,10 @@ def exit_handler(sig, frame):
     except Exception:
         logger.exception("[SHUTDOWN] Could not close the session.")
     lcd.display("Shutting down...")
-    db.update_machine_status(MACHINE_ID, STATUS_OFFLINE)
+    if not lockout.maintenance_active:
+        # Maintenance is sticky until staff clears it from the dashboard; a shutdown must not report
+        # this machine as merely 'offline' and silently drop that flag.
+        db.update_machine_status(MACHINE_ID, STATUS_OFFLINE)
     db.update_machine_heartbeat(MACHINE_ID)
     push_machine_status(db, MACHINE_ID)
     lcd.clear()
@@ -85,13 +88,21 @@ def main():
         try:
             if skip_startup:
                 skip_startup = False
+            elif lockout.estop_active or lockout.maintenance_active:
+                # Already known to be locked out (e.g. this loop just restarted right after maintenance
+                # or an emergency shutdown ended the previous session): the idle loop below already shows
+                # the right screen and keeps checking for it to lift, so a full resync here would only
+                # flicker "Syncing online" over that message every few seconds for no reason. A cold boot
+                # straight into a lockout still gets its one-time sync from the branch below, since the
+                # lockout thread's first poll has not necessarily completed yet at that point.
+                pass
             elif not startup_sequence(lcd, db):
                 time.sleep(5)
                 continue
 
             idle.reset()
             while True:
-                if lockout.estop_active:
+                if lockout.estop_active or lockout.maintenance_active:
                     idle.tick()
                     time.sleep(CARD_POLL_INTERVAL)
                     continue

@@ -7,13 +7,16 @@ from db.server_sync import (
     sync_session_to_server, push_session_start, push_user_status, push_machine_status, fetch_last_heartbeat,
 )
 from utils.timeutil import TS_FORMAT
-from config.constants import STATUS_NEUTRAL, STATUS_IN_USE, LCD_LINE_DELAY, CARD_POLL_INTERVAL
+from config.constants import (
+    STATUS_NEUTRAL, STATUS_IN_USE, STATUS_MAINTENANCE, LCD_LINE_DELAY, CARD_POLL_INTERVAL, LCD_MESSAGES,
+)
 
 logger = logging.getLogger("session")
 
 # Screen text when a running session is ended by the server (16 chars per line).
 REVOKED_MESSAGES = {
     "estop": ("EMERGENCY", "SHUTDOWN"),
+    "maintenance": (LCD_MESSAGES["maintenance"][0], LCD_MESSAGES["maintenance"][1]),
     "outside_hours": ("Lab closed", "Session ended"),
     "group_disabled": ("Group disabled", ""),
     "no_permission": ("Access revoked", "No permission"),
@@ -55,6 +58,11 @@ class SessionManager:
             time.sleep(delay)
 
     def _sync_machine_status(self, status, csu_id):
+        if self.lockout and self.lockout.maintenance_active and status != STATUS_MAINTENANCE:
+            # The dashboard's maintenance flag is the ground truth until staff clears it; a routine
+            # status push (session start/end) must not undo it. Checked live, not from the local cache,
+            # so this is correct even mid-session, the moment maintenance is turned on or lifted.
+            status = STATUS_MAINTENANCE
         self.db.update_machine_status(MACHINE_ID, status)
         self.db.update_machine_heartbeat(MACHINE_ID)
         push_user_status(self.db, csu_id)
@@ -84,11 +92,13 @@ class SessionManager:
         self._show(display_name[:16], "in use TEMP CARD" if temp else "in use", color="green")
 
     def _lockout_reason(self):
-        """None, 'estop', or the server's reason the signed-in user lost access."""
+        """None, 'estop', 'maintenance', or the server's reason the signed-in user lost access."""
         if not self.lockout:
             return None
         if self.lockout.estop_active:
             return "estop"
+        if self.lockout.maintenance_active:
+            return "maintenance"
         return self.lockout.revoked_reason
 
     def _end_for_lockout(self, reason):

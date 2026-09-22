@@ -6,7 +6,7 @@ from create_local_db import create_local_db
 from utils.timeutil import utc_now_str
 from db import access_rule
 from config.constants import (
-    STATUS_NEUTRAL, STATUS_IN_USE, STATUS_OFFLINE, STATUS_MAINTENANCE
+    STATUS_NEUTRAL, STATUS_IN_USE, STATUS_OFFLINE
 )
 
 logger = logging.getLogger("local_db")
@@ -34,11 +34,10 @@ class LocalDB:
             self.conn.commit()
 
     def update_machine_status(self, machine_id, status):
-        if (status != STATUS_MAINTENANCE):
-            self.cursor.execute("UPDATE Machine SET machine_status = ? WHERE machine_id = ?", (status, machine_id))
-            self.conn.commit()
-        else:
-            logger.warning(f"{machine_id} is in maintenance mode, status update skipped.")
+        """Plain write, no guard: SessionManager decides (from the live lockout state, not this cache)
+        whether a status push should be redirected to 'maintenance' instead of clobbering it."""
+        self.cursor.execute("UPDATE Machine SET machine_status = ? WHERE machine_id = ?", (status, machine_id))
+        self.conn.commit()
 
     def update_machine_ip(self, machine_id, device_ip):
         self.cursor.execute("UPDATE Machine SET device_ip = ? WHERE machine_id = ?", (device_ip, machine_id))

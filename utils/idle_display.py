@@ -10,7 +10,7 @@ class IdleDisplay:
 
     def __init__(self, lcd, db, lockout=None):
         self.lockout = lockout
-        self.showing_estop = False
+        self.showing_lockout = False
         self.lcd = lcd
         self.db = db
         self.reset()
@@ -20,14 +20,26 @@ class IdleDisplay:
         self.showing_last = False
         self.since = time.monotonic()
 
+    def _lockout_message(self):
+        """(line1, line2, color) while the machine is locked out, else None. Emergency shutdown (lab-wide)
+        takes priority over maintenance (this machine only) when, unusually, both are active."""
+        if not self.lockout:
+            return None
+        if self.lockout.estop_active:
+            return "EMERGENCY", "SHUTDOWN", "red"
+        if self.lockout.maintenance_active:
+            return LCD_MESSAGES["maintenance"][0], LCD_MESSAGES["maintenance"][1], "yellow"
+        return None
+
     def tick(self):
-        if self.lockout and self.lockout.estop_active:
-            if not self.showing_estop:
-                self.lcd.display("EMERGENCY", "SHUTDOWN", color="red")
-                self.showing_estop = True
+        msg = self._lockout_message()
+        if msg:
+            if not self.showing_lockout:
+                self.lcd.display(msg[0], msg[1], color=msg[2])
+                self.showing_lockout = True
             return
-        if self.showing_estop:
-            self.showing_estop = False
+        if self.showing_lockout:
+            self.showing_lockout = False
             self.lcd.display(*LCD_MESSAGES["startup_next"])
             self.reset()
             return

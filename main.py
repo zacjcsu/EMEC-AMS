@@ -142,9 +142,12 @@ def main():
                                       started.bypass)
             # The grace period only applies when the card was removed. If the server or a new card already
             # ended the session (lost card, revoke, expiry, emergency stop), there is nothing to resume.
+            # A resumed session is watched again here, so the next removal gets its own grace period.
             ended = session_mgr.wait_for_card_removal(reader)
-            if ended == "removed":
+            while ended == "removed":
                 ended = session_mgr.handle_grace_period(reader)
+                if ended == "resumed":
+                    ended = session_mgr.wait_for_card_removal(reader)
             skip_startup = ended in QUIET_END_REASONS
         except Exception:
             logger.exception("[MAIN] Unhandled error in main loop; recovering.")

@@ -342,6 +342,16 @@ def temp_card_verify(uid_hex, secret, conn=None):
         return None
 
 
+def temp_card_maintenance_bypass(uid_hex, machine_id, conn=None):
+    """True if this temp card may run this machine while it's in maintenance. None if the server is unreachable."""
+    try:
+        return bool(_with_conn(conn, lambda c: c.execute(
+            "SELECT temp_card_maintenance_bypass(%s::text, %s::text) AS ok", (uid_hex, machine_id)).fetchone()["ok"]))
+    except Exception as e:
+        logger.warning(f"[TEMP] temp_card_maintenance_bypass failed: {e}")
+        return None
+
+
 def report_card_present(machine_id, uid_hex, blank, conn=None):
     _with_conn(conn, lambda c: c.execute(
         "SELECT report_card_present(%s::text, %s::text, %s::boolean)", (machine_id, uid_hex, bool(blank))))

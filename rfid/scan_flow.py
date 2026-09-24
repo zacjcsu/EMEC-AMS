@@ -7,8 +7,8 @@ Cards that did not start a session are reported to the dashboard so a temp card 
 """
 import logging
 import time
-from config.constants import LCD_LINE_DELAY, LCD_MESSAGES
-from db.server_sync import temp_card_lookup, temp_card_verify, temp_card_finish
+from config.constants import LCD_LINE_DELAY, LCD_MESSAGES, MACHINE_ID
+from db.server_sync import temp_card_lookup, temp_card_verify, temp_card_finish, temp_card_maintenance_bypass
 from rfid.card_io import CardIO, CardLost, data_block
 from rfid.temp_writer import program_card
 from rfid.validator import validate_card
@@ -32,8 +32,9 @@ MISSES_TO_REMOVE = 3  # polls with no card before it counts as removed (debounce
 
 
 class SessionStart:
-    def __init__(self, csu_id, display_name, card_uid, temp):
+    def __init__(self, csu_id, display_name, card_uid, temp, bypass=False):
         self.csu_id, self.display_name, self.card_uid, self.temp = csu_id, display_name, card_uid, temp
+        self.bypass = bypass   # may run while this machine is in maintenance
 
 
 class ScanFlow:
@@ -97,6 +98,27 @@ class ScanFlow:
 
         return self._not_a_student_card(scan)
 
+    def process_maintenance(self, scan):
+        """While this machine is in maintenance, only a temp card issued to bypass it here can start a session.
+        Anything else is ignored. Returns (SessionStart or None, whether the LCD was changed)."""
+        self._misses = 0
+        if scan.uid_hex != self._uid:
+            self._reset_arrival(scan.uid_hex)
+        if scan.csu_id is not None or self._denied:
+            return None, False
+        lk = self._cached_lookup(scan.uid_hex)
+        if not lk or not lk["ok"]:
+            return None, False
+        bypass = temp_card_maintenance_bypass(scan.uid_hex, MACHINE_ID)
+        if not bypass:
+            self._denied = bypass is False    # retry only if the server was unreachable
+            return None, False
+        logger.info(f"[TEMP] {scan.uid_hex} may bypass maintenance on {MACHINE_ID}")
+        started = self._temp_login(scan, lk)
+        if started:
+            started.bypass = True
+        return started, True
+
     # ------------------------------------------------------------ not a student card
     def _cached_lookup(self, uid_hex):
         now = time.monotonic()
@@ -124,6 +146,8 @@ class ScanFlow:
         if lk["ok"] and not self._denied:
             started = self._temp_login(scan, lk)
             if started:
+                # A card that bypasses maintenance here keeps running if maintenance is set mid-session.
+                started.bypass = temp_card_maintenance_bypass(scan.uid_hex, MACHINE_ID) is True
                 self.activity.set_present(None)
                 return started
         elif lk["reason"] in REJECT_TEXT:

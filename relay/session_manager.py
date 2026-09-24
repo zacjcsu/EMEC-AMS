@@ -49,6 +49,7 @@ class SessionManager:
         self.display_name = None
         self.active_card_uid = None   # UID of the physical card that started the session
         self.active_temp = False      # True for a temporary card (recognised by UID, not by CSU ID)
+        self.active_bypass = False    # a temp card that may run this machine during maintenance
         if self.lockout:
             self.lockout.unwatch()
 
@@ -68,7 +69,7 @@ class SessionManager:
         push_user_status(self.db, csu_id)
         push_machine_status(self.db, MACHINE_ID)
 
-    def start_session(self, csu_id, display_name, card_uid=None, temp=False):
+    def start_session(self, csu_id, display_name, card_uid=None, temp=False, bypass=False):
         if not self.active_session_id:
             self.active_session_id = str(uuid.uuid4())
             self.session_start_time = time.time()
@@ -84,12 +85,14 @@ class SessionManager:
         self.display_name = display_name
         self.active_card_uid = card_uid
         self.active_temp = temp
+        self.active_bypass = bypass and temp
         if self.lockout:
-            self.lockout.watch(csu_id, card_uid if temp else None)
+            self.lockout.watch(csu_id, card_uid if temp else None, bypass_maintenance=self.active_bypass)
         self._sync_machine_status(STATUS_IN_USE, csu_id)
 
         self.relay.turn_on()
-        self._show(display_name[:16], "in use TEMP CARD" if temp else "in use", color="green")
+        line2 = "in use MAINT" if self.active_bypass else "in use TEMP CARD" if temp else "in use"
+        self._show(display_name[:16], line2, color="green")
 
     def _lockout_reason(self):
         """None, 'estop', 'maintenance', or the server's reason the signed-in user lost access."""
@@ -97,7 +100,7 @@ class SessionManager:
             return None
         if self.lockout.estop_active:
             return "estop"
-        if self.lockout.maintenance_active:
+        if self.lockout.maintenance_active and not self.lockout.bypass_maintenance:
             return "maintenance"
         return self.lockout.revoked_reason
 
@@ -189,7 +192,8 @@ class SessionManager:
             state = self._classify(reader.read_card_ex())
             if state == "same":
                 self._show("Session", "resumed", color="green", delay=1)
-                self.start_session(self.active_csu_id, self.display_name, self.active_card_uid, self.active_temp)
+                self.start_session(self.active_csu_id, self.display_name, self.active_card_uid, self.active_temp,
+                                   self.active_bypass)
                 return "resumed"
             elif state == "other":
                 self._show("New card at grace", "Resetting...", color="red", delay=LCD_LINE_DELAY)

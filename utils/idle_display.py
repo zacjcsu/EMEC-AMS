@@ -16,8 +16,9 @@ class IdleDisplay:
         self.reset()
 
     def reset(self):
-        """Call right after the scan prompt has been put on the screen by something else."""
+        """Call right after something else has drawn on the screen."""
         self.showing_last = False
+        self.showing_lockout = False
         self.since = time.monotonic()
 
     def _lockout_message(self):

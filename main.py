@@ -102,7 +102,20 @@ def main():
 
             idle.reset()
             while True:
-                if lockout.estop_active or lockout.maintenance_active:
+                if lockout.estop_active:
+                    idle.tick()
+                    time.sleep(CARD_POLL_INTERVAL)
+                    continue
+                if lockout.maintenance_active:
+                    # Only a temp card issued to bypass maintenance on this machine can start a session.
+                    scan = reader.read_card_ex()
+                    started, drew = flow.process_maintenance(scan) if scan else (None, False)
+                    if started:
+                        break
+                    if not scan:
+                        flow.no_card()
+                    if drew:
+                        idle.reset()
                     idle.tick()
                     time.sleep(CARD_POLL_INTERVAL)
                     continue
@@ -125,7 +138,8 @@ def main():
                 time.sleep(CARD_POLL_INTERVAL)
 
             flow.session_started()
-            session_mgr.start_session(started.csu_id, started.display_name, started.card_uid, started.temp)
+            session_mgr.start_session(started.csu_id, started.display_name, started.card_uid, started.temp,
+                                      started.bypass)
             # The grace period only applies when the card was removed. If the server or a new card already
             # ended the session (lost card, revoke, expiry, emergency stop), there is nothing to resume.
             ended = session_mgr.wait_for_card_removal(reader)

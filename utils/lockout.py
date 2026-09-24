@@ -19,7 +19,8 @@ class LockoutMonitor:
     * Maintenance: this machine's own machine.machine_status, set from the dashboard's "Set Maintenance"
       button. While it reads 'maintenance' the relay is locked off, `maintenance_active` is set, and the
       rest of the app blocks new scans and ends a running session, the same as an emergency shutdown but
-      for one machine instead of the whole lab.
+      for one machine instead of the whole lab. A temp card issued to bypass maintenance on this machine
+      is the exception: its session runs with the lock lifted, and the lock returns when it ends.
     * Access revoked mid-session: while a user is being watched (SessionManager calls watch/unwatch),
       the server's access_decision_machine() is asked about them every ACCESS_RECHECK_SECONDS. If they
       no longer have access (lab closed, group disabled, permission revoked) the relay is cut and
@@ -38,6 +39,7 @@ class LockoutMonitor:
         self.revoked_via = None  # the server's `via` for that reason (a disabled user's two-line message)
         self._watched = None  # csu_id of the user on the machine
         self._watched_card = None  # UID of the temporary card they signed in with, if any
+        self.bypass_maintenance = False  # the watched session may run while this machine is in maintenance
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="lockout-monitor", daemon=True)
@@ -48,7 +50,7 @@ class LockoutMonitor:
     def stop(self):
         self._stop.set()
 
-    def watch(self, csu_id, temp_card_uid=None):
+    def watch(self, csu_id, temp_card_uid=None, bypass_maintenance=False):
         """Start watching a session. For a temporary card, also pass its UID: the card itself is re-checked
         (lost, revoked, expired) as well as the person's access."""
         with self._lock:
@@ -57,6 +59,8 @@ class LockoutMonitor:
                 self.revoked_via = None
             self._watched = str(csu_id)
             self._watched_card = temp_card_uid
+            self.bypass_maintenance = bool(bypass_maintenance and temp_card_uid)
+        self.relay.set_lockout(self._relay_should_lock())
 
     def unwatch(self):
         with self._lock:
@@ -64,9 +68,11 @@ class LockoutMonitor:
             self._watched_card = None
             self.revoked_reason = None
             self.revoked_via = None
+            self.bypass_maintenance = False
+        self.relay.set_lockout(self._relay_should_lock())
 
     def _relay_should_lock(self):
-        return self.estop_active or self.maintenance_active
+        return self.estop_active or (self.maintenance_active and not self.bypass_maintenance)
 
     def _set_estop(self, active):
         if active == self.estop_active:
@@ -81,8 +87,11 @@ class LockoutMonitor:
             return
         self.maintenance_active = active
         self.relay.set_lockout(self._relay_should_lock())
-        logger.warning(f"[LOCKOUT] {self.machine_id} set to maintenance: relay locked off." if active
-                       else f"[LOCKOUT] {self.machine_id} taken out of maintenance.")
+        if active and self.bypass_maintenance:
+            logger.warning(f"[LOCKOUT] {self.machine_id} set to maintenance; the current session may continue.")
+        else:
+            logger.warning(f"[LOCKOUT] {self.machine_id} set to maintenance: relay locked off." if active
+                           else f"[LOCKOUT] {self.machine_id} taken out of maintenance.")
 
     def _check_access(self, conn, csu_id, temp_card_uid=None):
         row = None

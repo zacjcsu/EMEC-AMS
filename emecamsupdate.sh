@@ -18,7 +18,7 @@ FLAG="${APP_DIR}/.update-requested"
 LOCK="/run/emec-ams-update.lock"
 LOGFILE="${APP_DIR}/logs/update.log"
 
-REPO="${REPO:-https://github.com/zacjcsu/EMEC-AMS.git}"
+REPO="${REPO:-https://github.com/zacjcsu/emec-ams-client.git}"
 BRANCH="${BRANCH:-main}"
 
 # Provisioning ends with a reboot so the new hostname and machine-id take

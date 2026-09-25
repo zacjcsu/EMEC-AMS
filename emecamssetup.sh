@@ -2,7 +2,7 @@
 #
 # EMEC-AMS Raspberry Pi provisioning. Safe to re-run.
 #
-#   curl -fsSL https://raw.githubusercontent.com/zacjcsu/EMEC-AMS/main/emecamssetup.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/zacjcsu/emec-ams-client/main/emecamssetup.sh | bash
 #
 # Unattended: pass MACHINE_ID, MACHINE_NAME, MACHINE_TYPE, DB_* and --yes.
 
@@ -24,7 +24,7 @@ SOURCE_MODE="${SOURCE_MODE:-git}"
 # Blank on purpose: the zip contains a .env, so the id is a pointer to secrets.
 SOURCE_DRIVE_ID="${SOURCE_DRIVE_ID:-}"
 
-SOURCE_REPO="${SOURCE_REPO:-https://github.com/zacjcsu/EMEC-AMS.git}"
+SOURCE_REPO="${SOURCE_REPO:-https://github.com/zacjcsu/emec-ams-client.git}"
 SOURCE_BRANCH="${SOURCE_BRANCH:-main}"
 
 # Locale / regional settings applied non-interactively (replaces raspi-config).

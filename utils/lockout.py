@@ -26,8 +26,9 @@ class LockoutMonitor:
       the server's access_decision_machine() is asked about them every ACCESS_RECHECK_SECONDS. If they
       no longer have access (lab closed, group disabled, permission revoked) the relay is cut and
       `revoked_reason` is set for the session loop to end the session.
-    * Message: the two LCD lines on this machine's open maintenance record (dashboard migration 026), as
-      `message` (line1, line2), or None. The record is separate from the lock, so a running machine can have one.
+    * Message: what the dashboard wants on this machine's screen, from machine_message() (dashboard migration
+      028), as `message` (line1, line2), or None. That's the open maintenance record's two lines, or else
+      "Service due" for a due service task. It's separate from the lock, so a running machine can have one.
 
     If the server cannot be reached the last known state is kept: a dropped network neither starts nor
     lifts a lockout, and does not end a running session.
@@ -100,9 +101,7 @@ class LockoutMonitor:
 
     def _read_message(self, conn):
         try:
-            row = conn.execute(
-                "SELECT pi_line1, pi_line2 FROM maintenance_records WHERE machine_id = %s AND closed_at IS NULL",
-                (self.machine_id,)).fetchone()
+            row = conn.execute("SELECT line1, line2 FROM machine_message(%s)", (self.machine_id,)).fetchone()
         except psycopg.OperationalError:
             raise
         except psycopg.Error as e:
@@ -112,7 +111,7 @@ class LockoutMonitor:
                 self._message_failing = True
             return
         self._message_failing = False
-        message = (row["pi_line1"] or "", row["pi_line2"] or "") if row and (row["pi_line1"] or row["pi_line2"]) else None
+        message = (row["line1"] or "", row["line2"] or "") if row and (row["line1"] or row["line2"]) else None
         if message != self.message:
             logger.info(f"[LOCKOUT] Maintenance message: {message}")
             self.message = message

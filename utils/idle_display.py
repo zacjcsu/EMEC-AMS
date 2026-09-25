@@ -5,8 +5,8 @@ from config.constants import (
 
 
 class IdleDisplay:
-    """While nobody is on the machine, rotate the scan prompt, who used it last and the maintenance record's
-    message if there is one, so they can be read off the machine without opening the dashboard."""
+    """While nobody is on the machine, rotate the scan prompt, who used it last and the dashboard's message if
+    there is one, so they can be read off the machine without opening the dashboard."""
 
     def __init__(self, lcd, db, lockout=None):
         self.lockout = lockout

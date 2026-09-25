@@ -48,6 +48,7 @@ CARD_GRACE_PERIOD_DEFAULT = 10  # fallback if not in system_settings
 LCD_LINE_DELAY = 2  # seconds
 IDLE_SCAN_SCREEN_SECONDS = 8       # idle: how long "Scan CSU ID" shows...
 IDLE_LAST_USED_SCREEN_SECONDS = 4  # ...before "Last Used" shows this long
+IDLE_MESSAGE_SCREEN_SECONDS = 4    # ...then the maintenance record's message, if it has one
 LOCAL_DB_PATH = "data/local.db"
 
 # === Database (PostgreSQL on the dashboard VM) ===

@@ -1,6 +1,7 @@
 import logging
 import threading
 import time
+import psycopg
 from db.server_sync import get_server_connection
 from config.constants import (
     EMERGENCY_POLL_SECONDS, ENFORCE_ACCESS_DURING_SESSION, ACCESS_RECHECK_SECONDS, MACHINE_ID,
@@ -25,6 +26,8 @@ class LockoutMonitor:
       the server's access_decision_machine() is asked about them every ACCESS_RECHECK_SECONDS. If they
       no longer have access (lab closed, group disabled, permission revoked) the relay is cut and
       `revoked_reason` is set for the session loop to end the session.
+    * Message: the two LCD lines on this machine's open maintenance record (dashboard migration 026), as
+      `message` (line1, line2), or None. The record is separate from the lock, so a running machine can have one.
 
     If the server cannot be reached the last known state is kept: a dropped network neither starts nor
     lifts a lockout, and does not end a running session.
@@ -35,6 +38,8 @@ class LockoutMonitor:
         self.machine_id = machine_id
         self.estop_active = False
         self.maintenance_active = False
+        self.message = None
+        self._message_failing = False
         self.revoked_reason = None
         self.revoked_via = None  # the server's `via` for that reason (a disabled user's two-line message)
         self._watched = None  # csu_id of the user on the machine
@@ -93,6 +98,25 @@ class LockoutMonitor:
             logger.warning(f"[LOCKOUT] {self.machine_id} set to maintenance: relay locked off." if active
                            else f"[LOCKOUT] {self.machine_id} taken out of maintenance.")
 
+    def _read_message(self, conn):
+        try:
+            row = conn.execute(
+                "SELECT pi_line1, pi_line2 FROM maintenance_records WHERE machine_id = %s AND closed_at IS NULL",
+                (self.machine_id,)).fetchone()
+        except psycopg.OperationalError:
+            raise
+        except psycopg.Error as e:
+            # e.g. the dashboard's migration isn't applied yet. The lockout checks above must carry on regardless.
+            if not self._message_failing:
+                logger.warning(f"[LOCKOUT] Cannot read the maintenance message: {e}")
+                self._message_failing = True
+            return
+        self._message_failing = False
+        message = (row["pi_line1"] or "", row["pi_line2"] or "") if row and (row["pi_line1"] or row["pi_line2"]) else None
+        if message != self.message:
+            logger.info(f"[LOCKOUT] Maintenance message: {message}")
+            self.message = message
+
     def _check_access(self, conn, csu_id, temp_card_uid=None):
         row = None
         if temp_card_uid:
@@ -134,6 +158,7 @@ class LockoutMonitor:
                     "SELECT machine_status FROM machine WHERE machine_id = %s", (self.machine_id,)
                 ).fetchone()
                 self._set_maintenance(bool(mrow) and mrow["machine_status"] == STATUS_MAINTENANCE)
+                self._read_message(conn)
 
                 with self._lock:
                     watched, watched_card = self._watched, self._watched_card

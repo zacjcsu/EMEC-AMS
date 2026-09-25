@@ -1,8 +1,10 @@
 import logging
 import threading
 import time
+from collections import deque
+import psycopg
 from db.server_sync import (
-    get_server_connection, report_card_present, report_card_removed, temp_card_claim_job,
+    get_server_connection, report_card_present, report_card_removed, report_scan, temp_card_claim_job,
 )
 from config.constants import MACHINE_ID, CARD_REPORT_SECONDS, CARD_REPORT_MAX_AGE
 
@@ -22,6 +24,9 @@ class CardActivity:
     * presence is only reported while the main loop keeps refreshing it (CARD_REPORT_MAX_AGE), so a stalled
       loop or a session in progress stops it; the server also drops presence after 15 s.
 
+    Refused cards (refused()) wait in a queue until the server takes them, so they survive a network outage but
+    not a restart.
+
     Unreachable server: reporting and polling just skip that cycle.
     """
 
@@ -32,6 +37,7 @@ class CardActivity:
         self._stamp = 0.0
         self._job = None
         self._reported = False
+        self._refused = deque(maxlen=500)   # (monotonic time, uid_hex, csu_id, reason)
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="card-activity", daemon=True)
 
@@ -46,6 +52,27 @@ class CardActivity:
             self._present = (uid_hex, bool(blank)) if uid_hex else None
             self._stamp = time.monotonic()
 
+    def refused(self, uid_hex, csu_id, reason, at=None):
+        """`at` is the time.monotonic() of the scan, if it was refused a while ago."""
+        logger.info(f"[SCAN] Refused card {uid_hex} (CSU ID {csu_id}): {reason}")
+        with self._lock:
+            self._refused.append((at or time.monotonic(), uid_hex, csu_id, reason))
+
+    def _send_refused(self, conn):
+        while True:
+            with self._lock:
+                if not self._refused:
+                    return
+                t, uid_hex, csu_id, reason = self._refused[0]
+            try:
+                report_scan(self.machine_id, uid_hex, csu_id, reason, time.monotonic() - t, conn=conn)
+            except psycopg.OperationalError:
+                raise                   # the connection: keep it queued and retry
+            except psycopg.Error as e:
+                logger.warning(f"[SCAN] The server would not take the refused card {uid_hex}, dropping it: {e}")
+            with self._lock:
+                self._refused.popleft()
+
     def take_job(self):
         with self._lock:
             job, self._job = self._job, None
@@ -58,10 +85,11 @@ class CardActivity:
         while not self._stop.is_set():
             with self._lock:
                 present, stamp, has_job = self._present, self._stamp, self._job is not None
+                queued = bool(self._refused)
             now = time.monotonic()
             live = present is not None and now - stamp <= CARD_REPORT_MAX_AGE
             try:
-                if live or self._reported:
+                if live or self._reported or queued:
                     if conn is None or conn.closed:
                         conn = get_server_connection(timeout=3)
                         conn.autocommit = True
@@ -80,6 +108,8 @@ class CardActivity:
                     report_card_removed(self.machine_id, conn=conn)
                     self._reported = False
                     last_report = 0.0
+                if queued:
+                    self._send_refused(conn)
                 if failing:
                     logger.info("[CARD] Server reachable again.")
                     failing = False

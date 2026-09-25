@@ -14,7 +14,8 @@ def validate_card(csu_id, uid_num, db, lcd, relay, temp=False, hold_until_remove
     """Access check for a person. `temp` marks a temporary card: uid_num is then None, so no student UID is
     recorded against the user or their access request. `hold_until_removed(recheck)`, if given, is called
     after a disabled user's message is shown. It returns True if `recheck()` said the user got access while the
-    card was still on the reader (the scan then carries on as a grant), False once the card was removed."""
+    card was still on the reader (the scan then carries on as a grant), False once the card was removed.
+    Returns (csu_id, name), or (None, reason) when refused."""
     logger.info(f"[VALIDATOR] {'Temp card' if temp else 'Card'} scanned: {csu_id}")
     # Ask the server so dashboard changes apply to this scan; the local cache is only a fallback.
     decision = remote_access_decision(csu_id, MACHINE_ID)
@@ -48,7 +49,7 @@ def validate_card(csu_id, uid_num, db, lcd, relay, temp=False, hold_until_remove
         time.sleep(LCD_LINE_DELAY)
 
         startup_sequence(lcd, db)
-        return None, None
+        return None, reason
 
     if reason in HELD_REASONS:
         # user_disabled: `via` carries the dashboard's message, line 1, a newline, then an optional line 2.
@@ -71,7 +72,7 @@ def validate_card(csu_id, uid_num, db, lcd, relay, temp=False, hold_until_remove
         else:
             time.sleep(LCD_LINE_DELAY)
         if not restored:
-            return None, None
+            return None, reason
         logger.info(f"[ACCESS] {csu_id} regained access with the card still present")
         allowed = True           # carry on to the grant below
 
@@ -81,7 +82,7 @@ def validate_card(csu_id, uid_num, db, lcd, relay, temp=False, hold_until_remove
         lcd.display("Access Denied", line2, color="red")
         logger.warning(f"[ACCESS] Denied: {csu_id} ({reason})")
         time.sleep(LCD_LINE_DELAY)
-        return None, None
+        return None, reason
 
     display_name = user["name"] if user and user["name"] else str(csu_id)
 

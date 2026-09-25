@@ -23,9 +23,8 @@ from logging.handlers import TimedRotatingFileHandler
 import os
 
 os.makedirs("logs", exist_ok=True)
-file_handler = TimedRotatingFileHandler(
-    "logs/sync.log", when="D", interval=1, backupCount=7
-)
+# At midnight, not every 24 h from start: the nightly restart reset that clock, so rotation came at random or not at all.
+file_handler = TimedRotatingFileHandler("logs/sync.log", when="midnight", backupCount=14)
 # stdout reaches the journal via systemd.
 stream_handler = logging.StreamHandler()
 formatter = logging.Formatter(

@@ -361,6 +361,13 @@ def report_card_removed(machine_id, conn=None):
     _with_conn(conn, lambda c: c.execute("SELECT report_card_removed(%s::text)", (machine_id,)))
 
 
+def report_scan(machine_id, uid_hex, csu_id, reason, age_seconds, conn=None):
+    """A card this reader refused (migration 025). age_seconds is how long ago it was refused."""
+    _with_conn(conn, lambda c: c.execute(
+        "SELECT report_scan(%s::text, %s::text, %s::text, %s::text, %s::float8)",
+        (machine_id, uid_hex, None if csu_id is None else str(csu_id), reason, float(age_seconds))))
+
+
 def temp_card_claim_job(machine_id, conn=None):
     """The programming job aimed at this machine, as a dict, or None when there is nothing to do."""
     row = _with_conn(conn, lambda c: c.execute(

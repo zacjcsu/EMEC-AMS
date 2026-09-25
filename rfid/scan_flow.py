@@ -4,6 +4,7 @@ PI_ACCESS_CHECK.md, "Temporary cards"). Runs on the main thread, the only one th
 Order: the normal student-card path first and unchanged. Only when the card is not a student card is
 temp_card_lookup() called. A temp card that checks out goes through the same access check as anyone else.
 Cards that did not start a session are reported to the dashboard so a temp card can be programmed on this reader.
+Refused cards are also sent to the dashboard's scan log, once each time a card is put on the reader.
 """
 import logging
 import time
@@ -51,6 +52,12 @@ class ScanFlow:
         self._lookup = None        # (time, result) cached per arrival
         self._shown = False        # a rejection was already put on the LCD for this arrival
         self._denied = False       # this arrival was refused; do not retry until the card is removed and returns
+        self._logged = False       # this arrival's refusal was sent to the scan log
+
+    def _refused(self, scan, csu_id, reason, at=None):
+        if not self._logged:
+            self._logged = True
+            self.activity.refused(scan.uid_hex, csu_id, reason or "refused", at)
 
     # ------------------------------------------------------------ polling
     def session_started(self):
@@ -88,11 +95,13 @@ class ScanFlow:
             self._reset_arrival(scan.uid_hex)
 
         if scan.csu_id is not None:                      # a student card: the normal path, unchanged
+            scanned_at = time.monotonic()                # a refusal can hold the card for a while
             csu_id, name = validate_card(scan.csu_id, scan.uid_num, self.db, self.lcd, self.relay,
                                          hold_until_removed=self._hold_until_removed)
             if csu_id:
                 self.activity.set_present(None)
                 return SessionStart(csu_id, name, scan.uid_hex, False)
+            self._refused(scan, scan.csu_id, name, scanned_at)
             self.activity.set_present(scan.uid_hex, blank=False)   # a student card is never blank
             return None
 
@@ -104,14 +113,20 @@ class ScanFlow:
         self._misses = 0
         if scan.uid_hex != self._uid:
             self._reset_arrival(scan.uid_hex)
-        if scan.csu_id is not None or self._denied:
+        if scan.csu_id is not None:
+            self._refused(scan, scan.csu_id, "maintenance")
+            return None, False
+        if self._denied:
             return None, False
         lk = self._cached_lookup(scan.uid_hex)
         if not lk or not lk["ok"]:
+            self._refused(scan, None, lk["reason"] if lk else "server_offline")
             return None, False
         bypass = temp_card_maintenance_bypass(scan.uid_hex, MACHINE_ID)
         if not bypass:
             self._denied = bypass is False    # retry only if the server was unreachable
+            if self._denied:
+                self._refused(scan, None, "maintenance")
             return None, False
         logger.info(f"[TEMP] {scan.uid_hex} may bypass maintenance on {MACHINE_ID}")
         started = self._temp_login(scan, lk)
@@ -141,7 +156,8 @@ class ScanFlow:
         if lk is None:
             # Temp cards are online only; never fall back to a local copy.
             self._reject("Server offline", "Card not read")
-            return None                                   # nothing reported: the server is unreachable
+            self._refused(scan, None, "server_offline")   # queued until the server is back
+            return None
 
         if lk["ok"] and not self._denied:
             started = self._temp_login(scan, lk)
@@ -153,6 +169,8 @@ class ScanFlow:
         elif lk["reason"] in REJECT_TEXT:
             self._reject(*REJECT_TEXT[lk["reason"]])
         # unknown_card / not_temporary: silent, as any unrecognised card is today
+        if not lk["ok"]:
+            self._refused(scan, None, lk["reason"])
 
         self._report_presence(scan)
         return None
@@ -180,6 +198,7 @@ class ScanFlow:
                 logger.warning(f"[TEMP] {scan.uid_hex}: authentication with the issue key failed")
                 self._denied = True
                 self._reject(*REJECT_TEXT["read_failed"])
+                self._refused(scan, None, "read_failed")
                 return None
             secret = self.io.read(data_block(sector))
             self.io.r.MFRC522_StopCrypto1()
@@ -188,21 +207,26 @@ class ScanFlow:
         if not secret or len(secret) != 16:
             self._denied = True
             self._reject(*REJECT_TEXT["read_failed"])
+            self._refused(scan, None, "read_failed")
             return None
 
         v = temp_card_verify(scan.uid_hex, secret)
         if v is None:
             self._reject("Server offline", "Card not read")
+            self._refused(scan, None, "server_offline")
             return None
         if not v["allowed"]:
             logger.warning(f"[TEMP] {scan.uid_hex}: verify refused ({v['reason']})")
             self._denied = True
             self._reject(*REJECT_TEXT.get(v["reason"], ("Card not valid", "See staff")))
+            self._refused(scan, v.get("csu_id"), v["reason"])
             return None
 
+        scanned_at = time.monotonic()
         csu_id, name = validate_card(v["csu_id"], None, self.db, self.lcd, self.relay, temp=True,
                                      hold_until_removed=self._hold_until_removed)
         if not csu_id:
+            self._refused(scan, v["csu_id"], name, scanned_at)
             self._denied = True       # the person is not allowed on this machine right now
             self.lcd.display(*LCD_MESSAGES["startup_next"])
             return None
